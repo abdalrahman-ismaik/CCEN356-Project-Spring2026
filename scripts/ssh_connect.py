@@ -3,7 +3,7 @@ Script 1 — SSH Connection & Device Info via Netmiko
 
 Connects to a Cisco router via SSH, runs show commands, and prints output.
 Run from Client PC (192.165.10.92 or .79):
-    python3 ssh_connect.py
+    python ssh_connect.py
 """
 
 from netmiko import ConnectHandler

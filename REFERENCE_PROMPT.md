@@ -17,7 +17,7 @@ Build a lab environment that **compares HTTP vs HTTPS performance** using physic
 | **Routers** | 2× Cisco 2901 (physical hardware) |
 | **Switch** | 1× Cisco 2960 (physical hardware) |
 | **Server PC** | Windows laptop, IP: 192.165.20.79/24, gateway: 192.165.20.37 |
-| **Client PCs** | Linux, IPs: 192.165.10.92, 192.165.10.79 (subnet /24, gateway: 192.165.10.37) |
+| **Client PCs** | Windows laptops, IPs: 192.165.10.92, 192.165.10.79 (subnet /24, gateway: 192.165.10.37) |
 | **Python** | 3.8+ on client PCs |
 | **Team** | 2 members |
 
@@ -144,7 +144,7 @@ Install: `pip install -r requirements.txt`
 - Label as `"HTTP"` if port 80 involved, `"HTTPS"` if port 443
 - Each entry: `timestamp`, `src_ip`, `dst_ip`, `src_port`, `dst_port`, `protocol`, `length`
 - Save to `data/traffic_log.csv` using `csv.DictWriter`
-- **Requires `sudo` to run**
+- **Requires Administrator privileges on Windows to run**
 
 **CSV columns:** `timestamp,src_ip,dst_ip,src_port,dst_port,protocol,length`
 

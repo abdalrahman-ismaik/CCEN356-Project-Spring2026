@@ -2,11 +2,11 @@
 Script 2 — HTTP/HTTPS Traffic Capture with Scapy
 
 Captures HTTP (port 80) and HTTPS (port 443) packets for 60 seconds, logs to CSV.
-Run from Client PC with root privileges:
-    sudo python3 capture_traffic.py
+Run from Client PC as Administrator (Windows):
+    python capture_traffic.py
 """
 
-from scapy.all import sniff, TCP, IP
+from scapy.all import sniff, TCP, IP, get_if_list
 import csv
 import os
 from datetime import datetime
@@ -53,8 +53,18 @@ def save_to_csv(filename):
 if __name__ == '__main__':
     output_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'traffic_log.csv')
 
-    print("Starting capture on interface eth0 for 60 seconds...")
+    # Auto-detect interface: prefer Ethernet, fall back to first available
+    ifaces = get_if_list()
+    iface = None
+    for name in ifaces:
+        if 'ethernet' in name.lower() or 'eth' in name.lower():
+            iface = name
+            break
+    if iface is None:
+        iface = ifaces[0] if ifaces else 'Ethernet'
+
+    print(f"Starting capture on interface '{iface}' for 60 seconds...")
     print("Filtering HTTP (port 80) and HTTPS (port 443)\n")
 
-    sniff(iface='eth0', prn=packet_callback, timeout=60)
+    sniff(iface=iface, prn=packet_callback, timeout=60)
     save_to_csv(output_file)

@@ -50,6 +50,36 @@ interface GigabitEthernet0/1
 
 ip route 192.165.20.0 255.255.255.0 10.1.5.22
 
+! ACL — allow HTTP, HTTPS, and ICMP through WAN interface
+ip access-list extended HTTP_HTTPS_ONLY
+ permit tcp any any eq 80
+ permit tcp any any eq 443
+ permit tcp any eq 80 any established
+ permit tcp any eq 443 any established
+ permit icmp any any
+ exit
+
+interface GigabitEthernet0/0
+ ip access-group HTTP_HTTPS_ONLY in
+ exit
+
+! QoS — prioritize HTTP/HTTPS traffic
+class-map match-any HTTP_HTTPS
+ match protocol http
+ match protocol https
+ exit
+
+policy-map WEB_QOS
+ class HTTP_HTTPS
+  priority 1000
+ class class-default
+  fair-queue
+ exit
+
+interface GigabitEthernet0/0
+ service-policy output WEB_QOS
+ exit
+
 end
 write memory
 ```
@@ -85,6 +115,31 @@ ip route 192.165.10.0 255.255.255.0 10.1.5.21
 
 end
 write memory
+```
+
+**Server PC — Static IP (PowerShell as Administrator):**
+```powershell
+# Set static IP on wired adapter (run once per setup)
+Remove-NetIPAddress -InterfaceAlias "Ethernet" -Confirm:$false -ErrorAction SilentlyContinue
+Remove-NetRoute -InterfaceAlias "Ethernet" -Confirm:$false -ErrorAction SilentlyContinue
+New-NetIPAddress -InterfaceAlias "Ethernet" -IPAddress 192.165.20.79 -PrefixLength 24 -DefaultGateway 192.165.20.37
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ServerAddresses 8.8.8.8
+```
+
+**Client 1 PC — Static IP (PowerShell as Administrator):**
+```powershell
+Remove-NetIPAddress -InterfaceAlias "Ethernet" -Confirm:$false -ErrorAction SilentlyContinue
+Remove-NetRoute -InterfaceAlias "Ethernet" -Confirm:$false -ErrorAction SilentlyContinue
+New-NetIPAddress -InterfaceAlias "Ethernet" -IPAddress 192.165.10.92 -PrefixLength 24 -DefaultGateway 192.165.10.37
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ServerAddresses 8.8.8.8
+```
+
+**Client 2 PC — Static IP (PowerShell as Administrator):**
+```powershell
+Remove-NetIPAddress -InterfaceAlias "Ethernet" -Confirm:$false -ErrorAction SilentlyContinue
+Remove-NetRoute -InterfaceAlias "Ethernet" -Confirm:$false -ErrorAction SilentlyContinue
+New-NetIPAddress -InterfaceAlias "Ethernet" -IPAddress 192.165.10.79 -PrefixLength 24 -DefaultGateway 192.165.10.37
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ServerAddresses 8.8.8.8
 ```
 
 **Verify SSH is enabled on each router:**
@@ -153,7 +208,7 @@ python server\secured_server.py
 
 ### 5. Verify connectivity (from client PCs)
 
-```bash
+```powershell
 ping 192.165.20.79
 curl http://192.165.20.79
 curl -k https://192.165.20.79
@@ -161,25 +216,27 @@ curl -k https://192.165.20.79
 
 ## Running the Scripts
 
-Execute from client PCs in order:
+Execute from client PCs (Windows) in order:
 
-```bash
+```powershell
 # 1. SSH to router and collect show commands
-python3 scripts/ssh_connect.py
+python scripts/ssh_connect.py
 
-# 2. Capture traffic (requires sudo, run on Client 1)
-sudo python3 scripts/capture_traffic.py
+# 2. Capture traffic (run as Administrator on Client 1)
+python scripts/capture_traffic.py
 
 # 3. Performance benchmark (run on Client 2 while capture is active)
-python3 scripts/performance_metrics.py
+python scripts/performance_metrics.py
 
-# 4. Generate charts (after capture completes) 
-python3 scripts/visualize_traffic.py
+# 4. Generate charts (after capture completes)
+python scripts/visualize_traffic.py
 
 # 5. Live dashboard
-python3 scripts/dashboard.py
+python scripts/dashboard.py
 # Then visit http://localhost:5000
 ```
+
+> **Note:** `capture_traffic.py` requires **Administrator** privileges on Windows for Scapy to capture packets. Right-click PowerShell → Run as Administrator.
 
 ## Project Structure
 
