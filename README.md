@@ -17,6 +17,90 @@ Compare HTTP vs HTTPS performance using physical Cisco networking equipment, Pyt
 
 ## Setup
 
+### 0. Configure Cisco Routers (via console cable)
+
+Connect to each router with a console cable (PuTTY / terminal emulator) and paste the config below.
+
+**R1 — SSH & Network Setup:**
+```
+enable
+configure terminal
+
+hostname R1
+ip domain-name lab.local
+crypto key generate rsa modulus 2048
+ip ssh version 2
+enable secret cisco123
+username admin privilege 15 secret admin123
+
+line vty 0 4
+ transport input ssh
+ login local
+ exit
+
+interface GigabitEthernet0/0
+ ip address 10.1.5.21 255.255.255.252
+ no shutdown
+ exit
+
+interface GigabitEthernet0/1
+ ip address 192.165.10.37 255.255.255.0
+ no shutdown
+ exit
+
+ip route 192.165.20.0 255.255.255.0 10.1.5.22
+
+end
+write memory
+```
+
+**R2 — SSH & Network Setup:**
+```
+enable
+configure terminal
+
+hostname R2
+ip domain-name lab.local
+crypto key generate rsa modulus 2048
+ip ssh version 2
+enable secret cisco123
+username admin privilege 15 secret admin123
+
+line vty 0 4
+ transport input ssh
+ login local
+ exit
+
+interface GigabitEthernet0/0
+ ip address 10.1.5.22 255.255.255.252
+ no shutdown
+ exit
+
+interface GigabitEthernet0/1
+ ip address 192.165.20.37 255.255.255.0
+ no shutdown
+ exit
+
+ip route 192.165.10.0 255.255.255.0 10.1.5.21
+
+end
+write memory
+```
+
+**Verify SSH is enabled on each router:**
+```
+show ip ssh
+show ip interface brief
+```
+- `show ip ssh` should say `SSH Enabled - version 2.0`
+- Interfaces should show `up/up`
+
+**Test SSH from a client PC before running scripts:**
+```bash
+ssh admin@192.165.10.37
+# Password: admin123
+```
+
 ### 1. Install Python dependencies (on client PCs)
 
 ```bash
@@ -89,7 +173,7 @@ sudo python3 scripts/capture_traffic.py
 # 3. Performance benchmark (run on Client 2 while capture is active)
 python3 scripts/performance_metrics.py
 
-# 4. Generate charts (after capture completes)
+# 4. Generate charts (after capture completes) 
 python3 scripts/visualize_traffic.py
 
 # 5. Live dashboard
