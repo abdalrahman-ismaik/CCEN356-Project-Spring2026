@@ -16,9 +16,8 @@ Build a lab environment that **compares HTTP vs HTTPS performance** using physic
 |---|---|
 | **Routers** | 2× Cisco 2901 (physical hardware) |
 | **Switch** | 1× Cisco 2960 (physical hardware) |
-| **Server PC** | Linux (Ubuntu/Debian), IP: 192.168.2.10/24, gateway: 192.168.2.1 |
-| **Client PCs** | Linux, IPs: 192.168.1.10, 192.168.1.11 (subnet /24, gateway: 192.168.1.1) |
-| **Monitor PC** | Linux with Wireshark, IP: 192.168.1.20/24, connected to SPAN port |
+| **Server PC** | Windows laptop, IP: 192.165.20.79/24, gateway: 192.165.20.37 |
+| **Client PCs** | Linux, IPs: 192.165.10.92, 192.165.10.79 (subnet /24, gateway: 192.165.10.37) |
 | **Python** | 3.8+ on client PCs |
 | **Team** | 2 members |
 
@@ -27,29 +26,27 @@ Build a lab environment that **compares HTTP vs HTTPS performance** using physic
 ## Network Topology
 
 ```
-[Client 1: 192.168.1.10] ──┐
-[Client 2: 192.168.1.11] ──┤── [SW1 (2960)] ──Gi0/1── [R1 (2901)] ──Gi0/1── [R2 (2901)] ──Gi0/1── [Server: 192.168.2.10]
-[Monitor:  192.168.1.20] ──┘       │
-                              (SPAN to Gi0/10)
+[Client 1: 192.165.10.92] ──┐
+[Client 2: 192.165.10.79] ──┤── [SW1 (2960)] ──── [R1 (2901)] ──Gi0/0── [R2 (2901)] ──Gi0/1── [Server: 192.165.20.79]
+                            └── (SPAN port)
 ```
 
 ### IP Addressing Table
 
 | Device | Interface | IP Address | Subnet Mask | Role |
 |---|---|---|---|---|
-| R1 | Gi0/0 | 192.168.1.1 | 255.255.255.0 | LAN gateway (client side) |
-| R1 | Gi0/1 | 10.0.0.1 | 255.255.255.252 | WAN link to R2 |
-| R2 | Gi0/0 | 10.0.0.2 | 255.255.255.252 | WAN link to R1 |
-| R2 | Gi0/1 | 192.168.2.1 | 255.255.255.0 | LAN gateway (server side) |
-| Server | eth0 | 192.168.2.10 | 255.255.255.0 | Web server |
-| Client 1 | eth0 | 192.168.1.10 | 255.255.255.0 | Test client |
-| Client 2 | eth0 | 192.168.1.11 | 255.255.255.0 | Test client |
-| Monitor | eth0 | 192.168.1.20 | 255.255.255.0 | Wireshark capture |
+| R1 | Gi0/0 | 10.1.5.21 | 255.255.255.252 | WAN link to R2 |
+| R1 | Gi0/1 | 192.165.10.37 | 255.255.255.0 | LAN gateway (client side) |
+| R2 | Gi0/0 | 10.1.5.22 | 255.255.255.252 | WAN link to R1 |
+| R2 | Gi0/1 | 192.165.20.37 | 255.255.255.0 | LAN gateway (server side) |
+| Server | NIC | 192.165.20.79 | 255.255.255.0 | Web server (Windows) |
+| Client 1 | NIC | 192.165.10.92 | 255.255.255.0 | Test client |
+| Client 2 | NIC | 192.165.10.79 | 255.255.255.0 | Test client |
 
 ### Routing
 
-- R1: `ip route 192.168.2.0 255.255.255.0 10.0.0.2`
-- R2: `ip route 192.168.1.0 255.255.255.0 10.0.0.1`
+- R1: `ip route 192.165.20.0 255.255.255.0 10.1.5.22`
+- R2: `ip route 192.165.10.0 255.255.255.0 10.1.5.21`
 
 ### Credentials
 
@@ -121,14 +118,14 @@ Install: `pip install -r requirements.txt`
 **Purpose:** Connect to Cisco routers via SSH, execute show commands, print and return results.
 
 **Behavior:**
-- Connect to R1 at 192.168.1.1 using `netmiko.ConnectHandler` with `device_type='cisco_ios'`
+- Connect to R1 at 192.165.10.37 using `netmiko.ConnectHandler` with `device_type='cisco_ios'`
 - Credentials: username=`admin`, password=`admin123`, secret=`admin123`
 - Call `connection.enable()` to enter privileged exec mode
 - Execute these commands and store output in a dict keyed by command string:
   - `show ip interface brief`
   - `show ip route`
   - `show access-lists`
-  - `show policy-map interface GigabitEthernet0/1`
+  - `show policy-map interface GigabitEthernet0/0`
 - Print each command's output with a header
 - Disconnect when done
 - `if __name__ == "__main__":` calls the function with R1's IP
@@ -140,7 +137,7 @@ Install: `pip install -r requirements.txt`
 **Purpose:** Capture HTTP and HTTPS packets on the client's network interface for 60 seconds, log to CSV.
 
 **Behavior:**
-- Use `scapy.all.sniff()` on interface (detect with `ip a`, likely `eth0` or `ens33`)
+- Use `scapy.all.sniff()` on interface (detect with `ipconfig`, likely `Ethernet` or `Wi-Fi`)
 - Timeout: 60 seconds
 - Callback function filters packets that have both TCP and IP layers
 - Only record packets where src_port or dst_port is 80 or 443
@@ -158,7 +155,7 @@ Install: `pip install -r requirements.txt`
 **Purpose:** Send 20 requests each to HTTP and HTTPS endpoints, measure and compare performance.
 
 **Behavior:**
-- Targets: `http://192.168.2.10` (HTTP) and `https://192.168.2.10` (HTTPS)
+- Targets: `http://192.165.20.79` (HTTP) and `https://192.165.20.79` (HTTPS)
 - 20 GET requests per target with `requests.get(url, timeout=10, verify=False)`
 - Suppress urllib3 InsecureRequestWarning
 - Measure per-request elapsed time in ms
@@ -211,12 +208,21 @@ Install: `pip install -r requirements.txt`
 - Same routes, logging to `http_server.log`
 - No SSL, no security headers (plain HTTP for comparison)
 
-### Generate SSL Certificates
+### Generate SSL Certificates (on Windows Server)
 
+Use Git Bash, WSL, or OpenSSL for Windows:
 ```bash
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-  -keyout server/key.pem -out server/cert.pem \
-  -subj "/CN=192.168.2.10/O=CCEN356Lab"
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 ^
+  -keyout server\key.pem -out server\cert.pem ^
+  -subj "/CN=192.165.20.79/O=CCEN356Lab"
+```
+
+### Windows Firewall
+
+Open ports 80, 443, and 8443 (run as Administrator in PowerShell):
+```powershell
+New-NetFirewallRule -DisplayName "CCEN356 HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
+New-NetFirewallRule -DisplayName "CCEN356 HTTPS" -Direction Inbound -LocalPort 443,8443 -Protocol TCP -Action Allow
 ```
 
 ---
@@ -233,16 +239,16 @@ line console 0
  login
 
 interface GigabitEthernet0/0
- ip address 192.168.1.1 255.255.255.0
- no shutdown
- description LAN_SIDE
-
-interface GigabitEthernet0/1
- ip address 10.0.0.1 255.255.255.252
+ ip address 10.1.5.21 255.255.255.252
  no shutdown
  description WAN_TO_R2
 
-ip route 192.168.2.0 255.255.255.0 10.0.0.2
+interface GigabitEthernet0/1
+ ip address 192.165.10.37 255.255.255.0
+ no shutdown
+ description LAN_SIDE
+
+ip route 192.165.20.0 255.255.255.0 10.1.5.22
 
 ip domain-name lab.local
 crypto key generate rsa modulus 2048
@@ -260,7 +266,7 @@ ip access-list extended HTTP_HTTPS_ONLY
  permit tcp any eq 443 any established
  permit icmp any any
 
-interface GigabitEthernet0/1
+interface GigabitEthernet0/0
  ip access-group HTTP_HTTPS_ONLY in
 
 ! QoS
@@ -274,7 +280,7 @@ policy-map WEB_QOS
  class class-default
   fair-queue
 
-interface GigabitEthernet0/1
+interface GigabitEthernet0/0
  service-policy output WEB_QOS
 ```
 
@@ -288,16 +294,16 @@ line console 0
  login
 
 interface GigabitEthernet0/0
- ip address 10.0.0.2 255.255.255.252
+ ip address 10.1.5.22 255.255.255.252
  no shutdown
  description WAN_TO_R1
 
 interface GigabitEthernet0/1
- ip address 192.168.2.1 255.255.255.0
+ ip address 192.165.20.37 255.255.255.0
  no shutdown
  description TO_SERVER
 
-ip route 192.168.1.0 255.255.255.0 10.0.0.1
+ip route 192.165.10.0 255.255.255.0 10.1.5.21
 
 ip domain-name lab.local
 crypto key generate rsa modulus 2048
@@ -323,9 +329,9 @@ monitor session 1 destination interface GigabitEthernet0/10
 1. Cable topology, power on all devices
 2. Configure R1, R2 via console cable (PuTTY / minicom)
 3. Configure SW1 SPAN port
-4. Set up Server PC: Apache + Flask servers running
-5. Verify: `ping 192.168.2.10` from client PCs
-6. Verify: `curl http://192.168.2.10` and `curl -k https://192.168.2.10`
+4. Set up Server PC (Windows): open firewall ports, start Flask HTTP + HTTPS servers
+5. Verify: `ping 192.165.20.79` from client PCs
+6. Verify: `curl http://192.165.20.79` and `curl -k https://192.165.20.79` (or `Invoke-WebRequest` on Windows)
 7. Start Wireshark on Monitor PC
 8. Run `sudo python3 scripts/capture_traffic.py` on Client 1
 9. Run `python3 scripts/performance_metrics.py` on Client 2
@@ -369,10 +375,10 @@ monitor session 1 destination interface GigabitEthernet0/10
 
 ## Verification Checklist
 
-- [ ] `ping 192.168.2.10` from every client succeeds
-- [ ] `ssh admin@192.168.1.1` from client works
-- [ ] `curl http://192.168.2.10` returns HTML
-- [ ] `curl -k https://192.168.2.10` returns HTML
+- [ ] `ping 192.165.20.79` from every client succeeds
+- [ ] `ssh admin@192.165.10.37` from client works
+- [ ] `curl http://192.165.20.79` returns HTML
+- [ ] `curl -k https://192.165.20.79` returns HTML
 - [ ] `python3 scripts/ssh_connect.py` prints router show outputs
 - [ ] `sudo python3 scripts/capture_traffic.py` → `data/traffic_log.csv`
 - [ ] `python3 scripts/performance_metrics.py` → `data/performance_results.csv`
@@ -387,9 +393,9 @@ monitor session 1 destination interface GigabitEthernet0/10
 ## Key Decisions
 
 - **Physical hardware** (not Packet Tracer) — Cisco 2901 routers, 2960 switch
-- **Apache** on server for standard HTTP (80) / HTTPS (443); Flask servers supplementary (80 / 8443)
+- **Windows PC** as server (192.165.20.79) — Flask serves HTTP (:80) and HTTPS (:8443) directly, no Apache
 - **Self-signed SSL** certs — `verify=False` in Python scripts is acceptable
-- **Scapy requires root/sudo** to capture packets
+- **Scapy requires root/sudo** to capture packets (on Linux clients)
 - **All Python scripts** run on client PCs (Linux)
 - **Flask dashboard** (Script 5) is included
 - **All code is fresh** — no pre-existing codebase

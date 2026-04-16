@@ -127,8 +127,8 @@ DASHBOARD_HTML = """
 def background_collector():
     """Background thread that continuously pings HTTP and HTTPS servers."""
     targets = [
-        ("http://192.168.2.10", "http"),
-        ("https://192.168.2.10", "https"),
+        ("http://192.165.20.79", "http"),
+        ("https://192.165.20.79", "https"),
     ]
     while True:
         for url, key in targets:

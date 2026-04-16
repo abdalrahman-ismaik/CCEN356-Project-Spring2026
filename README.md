@@ -10,10 +10,9 @@ Compare HTTP vs HTTPS performance using physical Cisco networking equipment, Pyt
 ## Network Topology
 
 ```
-[Client 1: 192.168.1.10] ──┐
-[Client 2: 192.168.1.11] ──┤── [SW1 (2960)] ── [R1 (2901)] ── [R2 (2901)] ── [Server: 192.168.2.10]
-[Monitor:  192.168.1.20] ──┘       │
-                              (SPAN to Gi0/10)
+[Client 1: 192.165.10.92] ──┐
+[Client 2: 192.165.10.79] ──┤── [SW1 (2960)] ── [R1 (2901)] ── [R2 (2901)] ── [Server: 192.165.20.79]
+                            └── (SPAN port)
 ```
 
 ## Setup
@@ -24,34 +23,56 @@ Compare HTTP vs HTTPS performance using physical Cisco networking equipment, Pyt
 pip install -r requirements.txt
 ```
 
-### 2. Generate SSL certificates (on server PC)
+### 2. Generate SSL certificates (on Windows server)
 
+**Option A — Python (recommended, works everywhere):**
+```powershell
+cd server
+python -c "
+from OpenSSL import crypto
+k = crypto.PKey(); k.generate_key(crypto.TYPE_RSA, 2048)
+c = crypto.X509()
+c.get_subject().CN = '192.165.20.79'; c.get_subject().O = 'CCEN356Lab'
+c.set_serial_number(1000); c.gmtime_adj_notBefore(0); c.gmtime_adj_notAfter(365*24*60*60)
+c.set_issuer(c.get_subject()); c.set_pubkey(k); c.sign(k, 'sha256')
+open('cert.pem','wb').write(crypto.dump_certificate(crypto.FILETYPE_PEM, c))
+open('key.pem','wb').write(crypto.dump_privatekey(crypto.FILETYPE_PEM, k))
+print('Generated cert.pem and key.pem')
+"
+```
+
+**Option B — OpenSSL CLI (Git Bash or WSL):**
 ```bash
-cd server/
+cd server
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -keyout key.pem -out cert.pem \
-  -subj "/CN=192.168.2.10/O=CCEN356Lab"
+  -subj "/CN=192.165.20.79/O=CCEN356Lab"
 ```
 
-### 3. Start servers (on server PC — 192.168.2.10)
+### 3. Open Windows Firewall ports (run PowerShell as Administrator)
 
-```bash
-# Terminal 1: HTTP server
-sudo python3 server/http_server.py
-
-# Terminal 2: HTTPS server
-python3 server/secured_server.py
-
-# Also ensure Apache is running for ports 80/443
-sudo systemctl start apache2
+```powershell
+New-NetFirewallRule -DisplayName "CCEN356 HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
+New-NetFirewallRule -DisplayName "CCEN356 HTTPS" -Direction Inbound -LocalPort 443,8443 -Protocol TCP -Action Allow
+New-NetFirewallRule -DisplayName "CCEN356 Allow Ping" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow
 ```
 
-### 4. Verify connectivity (from client PCs)
+### 4. Start servers (on Windows server — 192.165.20.79)
+
+```powershell
+# Terminal 1 (run as Administrator for port 80)
+python server\http_server.py
+
+# Terminal 2
+python server\secured_server.py
+```
+
+### 5. Verify connectivity (from client PCs)
 
 ```bash
-ping 192.168.2.10
-curl http://192.168.2.10
-curl -k https://192.168.2.10
+ping 192.165.20.79
+curl http://192.165.20.79
+curl -k https://192.165.20.79
 ```
 
 ## Running the Scripts
@@ -86,8 +107,8 @@ python3 scripts/dashboard.py
 │   ├── visualize_traffic.py      # Matplotlib charts
 │   └── dashboard.py              # Flask live dashboard
 ├── server/
-│   ├── http_server.py            # Flask HTTP (port 80)
-│   ├── secured_server.py         # Flask HTTPS (port 8443)
+│   ├── http_server.py            # Flask HTTP (port 80) — primary HTTP server
+│   ├── secured_server.py         # Flask HTTPS (port 8443) — primary HTTPS server
 │   └── templates/
 │       ├── index.html
 │       └── show.html

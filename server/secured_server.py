@@ -1,13 +1,13 @@
 """
 Secured HTTPS Server — Flask HTTPS on port 8443 with security headers.
 
-Generate certificates first:
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-      -keyout server/key.pem -out server/cert.pem \
-      -subj "/CN=192.168.2.10/O=CCEN356Lab"
+Generate certificates first (Git Bash, WSL, or OpenSSL for Windows):
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 ^
+      -keyout server\key.pem -out server\cert.pem ^
+      -subj "/CN=192.165.20.79/O=CCEN356Lab"
 
-Run on Server PC (192.168.2.10):
-    python3 secured_server.py
+Run on Server PC (Windows, 192.165.20.79):
+    python secured_server.py
 """
 
 from flask import Flask, render_template, request, abort
@@ -80,7 +80,7 @@ if __name__ == '__main__':
         print("Generate them with:")
         print("  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \\")
         print("    -keyout server/key.pem -out server/cert.pem \\")
-        print('    -subj "/CN=192.168.2.10/O=CCEN356Lab"')
+        print('    -subj "/CN=192.165.20.79/O=CCEN356Lab"')
         exit(1)
 
     print("HTTPS server starting on https://0.0.0.0:8443")

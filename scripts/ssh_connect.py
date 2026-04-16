@@ -2,7 +2,7 @@
 Script 1 — SSH Connection & Device Info via Netmiko
 
 Connects to a Cisco router via SSH, runs show commands, and prints output.
-Run from Client PC (192.168.1.10 or .11):
+Run from Client PC (192.165.10.92 or .79):
     python3 ssh_connect.py
 """
 
@@ -28,7 +28,7 @@ def connect_to_device(host, username='admin', password='admin123'):
         'show ip interface brief',
         'show ip route',
         'show access-lists',
-        'show policy-map interface GigabitEthernet0/1',
+        'show policy-map interface GigabitEthernet0/0',
     ]
 
     results = {}
@@ -45,4 +45,4 @@ def connect_to_device(host, username='admin', password='admin123'):
 
 
 if __name__ == '__main__':
-    connect_to_device('192.168.1.1')
+    connect_to_device('192.165.10.37')

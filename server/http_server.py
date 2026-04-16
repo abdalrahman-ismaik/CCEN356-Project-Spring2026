@@ -1,8 +1,10 @@
 """
 HTTP Server — Plain HTTP on port 80 for performance comparison.
 
-Run on Server PC (192.168.2.10):
-    sudo python3 http_server.py
+Run on Server PC (Windows, 192.165.20.79):
+    python http_server.py
+
+Note: On Windows, run as Administrator to bind to port 80.
 """
 
 from flask import Flask, render_template, request

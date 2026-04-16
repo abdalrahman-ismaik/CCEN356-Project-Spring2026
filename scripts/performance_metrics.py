@@ -63,8 +63,8 @@ def measure_request(url, protocol_label, num_requests=20):
 def run_comparison():
     """Run HTTP vs HTTPS comparison and save results to CSV."""
     targets = [
-        ("http://192.168.2.10", "HTTP"),
-        ("https://192.168.2.10", "HTTPS"),
+        ("http://192.165.20.79", "HTTP"),
+        ("https://192.165.20.79", "HTTPS"),
     ]
 
     all_metrics = []
