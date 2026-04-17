@@ -119,14 +119,23 @@ interface GigabitEthernet0/0
  ip access-group HTTP_HTTPS_ONLY in
  exit
 
+ip access-list extended WEB_QOS_PORTS
+ permit tcp any any eq 80
+ permit tcp any any eq 443
+ permit tcp any eq 80 any
+ permit tcp any eq 443 any
+ exit
+
 class-map match-any HTTP_HTTPS
- match protocol http
- match protocol https
+ match access-group name WEB_QOS_PORTS
  exit
 
 policy-map WEB_QOS
  class HTTP_HTTPS
-  priority 1000
+  no bandwidth
+  no bandwidth percent
+  priority percent 30
+  ! If your IOS image rejects the line above, use: priority 1000
  class class-default
   fair-queue
  exit
@@ -237,10 +246,13 @@ Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ServerAddresses 8.8.8.8
 
 **Client 1 PC (192.165.10.92):**
 ```powershell
-Remove-NetIPAddress -InterfaceAlias "Ethernet" -Confirm:$false -ErrorAction SilentlyContinue
-Remove-NetRoute -InterfaceAlias "Ethernet" -Confirm:$false -ErrorAction SilentlyContinue
-New-NetIPAddress -InterfaceAlias "Ethernet" -IPAddress 192.165.10.92 -PrefixLength 24 -DefaultGateway 192.165.10.37
-Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ServerAddresses 8.8.8.8
+Get-NetAdapter | Select-Object Name, InterfaceDescription, Status
+$iface = "Ethernet 5"   # replace with the adapter alias shown above
+
+Remove-NetIPAddress -InterfaceAlias $iface -Confirm:$false -ErrorAction SilentlyContinue
+Remove-NetRoute -InterfaceAlias $iface -Confirm:$false -ErrorAction SilentlyContinue
+New-NetIPAddress -InterfaceAlias $iface -IPAddress 192.165.10.92 -PrefixLength 24 -DefaultGateway 192.165.10.37
+Set-DnsClientServerAddress -InterfaceAlias $iface -ServerAddresses 8.8.8.8
 ```
 
 **Client 2 PC (192.165.10.79):**
