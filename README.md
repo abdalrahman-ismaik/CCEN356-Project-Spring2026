@@ -277,11 +277,11 @@ ping 192.165.20.79   # Server — tests full end-to-end path
 
 Also test SSH from a client to R1:
 ```powershell
-ssh -oKexAlgorithms=+diffie-hellman-group14-sha1 admin@192.165.10.37
+ssh -o "KexAlgorithms=+diffie-hellman-group14-sha1" -o "HostKeyAlgorithms=+ssh-rsa" -o "Ciphers=+aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc" -o "MACs=+hmac-sha1" admin@192.165.10.37
 # password: admin123
 ```
 
-> **Why the extra flag?** The Cisco 2901 only advertises legacy key-exchange methods (`diffie-hellman-group14-sha1`, `group1-sha1`). Modern Windows OpenSSH disables these by default. The `-oKexAlgorithms=+diffie-hellman-group14-sha1` flag re-enables the safest of the three so the handshake succeeds. You need this flag every time you SSH to either router from a Windows client.
+> **Why the extra flags?** The Cisco 2901 commonly advertises legacy SSH algorithms only: key exchange (`diffie-hellman-group14-sha1`, sometimes `group1-sha1`), host key type (`ssh-rsa`), older ciphers (CBC), and older MACs (`hmac-sha1`). Modern Windows OpenSSH disables these by default. The quoted `-o` options re-enable compatible algorithms and avoid PowerShell parsing issues with comma-separated lists.
 
 **Expected:** You land at `R1#` prompt. Type `exit` to disconnect.
 
@@ -549,7 +549,7 @@ SSH to each router and save the running configuration to the `configs/` folder.
 
 **From Client 1:**
 ```powershell
-ssh -oKexAlgorithms=+diffie-hellman-group14-sha1 admin@192.165.10.37
+ssh -o "KexAlgorithms=+diffie-hellman-group14-sha1" -o "HostKeyAlgorithms=+ssh-rsa" -o "Ciphers=+aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc" -o "MACs=+hmac-sha1" admin@192.165.10.37
 # password: admin123
 # at the R1# prompt:
 show running-config
@@ -558,7 +558,7 @@ Copy the full output and paste into `configs/R1_config.txt`.
 
 Repeat for R2:
 ```powershell
-ssh -oKexAlgorithms=+diffie-hellman-group14-sha1 admin@192.165.20.37
+ssh -o "KexAlgorithms=+diffie-hellman-group14-sha1" -o "HostKeyAlgorithms=+ssh-rsa" -o "Ciphers=+aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc" -o "MACs=+hmac-sha1" admin@192.165.20.37
 # at the R2# prompt:
 show running-config
 ```
