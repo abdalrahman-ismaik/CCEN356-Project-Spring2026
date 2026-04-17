@@ -76,14 +76,23 @@ interface GigabitEthernet0/0
  exit
 
 ! QoS — prioritize HTTP/HTTPS traffic
+ip access-list extended WEB_QOS_PORTS
+ permit tcp any any eq 80
+ permit tcp any any eq 443
+ permit tcp any eq 80 any
+ permit tcp any eq 443 any
+ exit
+
 class-map match-any HTTP_HTTPS
- match protocol http
- match protocol https
+ match access-group name WEB_QOS_PORTS
  exit
 
 policy-map WEB_QOS
  class HTTP_HTTPS
-  priority 1000
+  no bandwidth
+  no bandwidth percent
+  priority percent 30
+  ! If your IOS image rejects the line above, use: priority 1000
  class class-default
   fair-queue
  exit
