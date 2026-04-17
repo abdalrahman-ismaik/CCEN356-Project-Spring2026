@@ -14,7 +14,6 @@ Compare HTTP vs HTTPS performance using physical Cisco networking equipment, Pyt
 ```
 [Client 1: 192.165.10.92] ──┐
 [Client 2: 192.165.10.79] ──┤── [SW1 (2960)] ── [R1 (2901)] ── [R2 (2901)] ── [Server: 192.165.20.79]
-                            └── (SPAN port on Gi0/10)
 ```
 
 ## IP Addressing Quick Reference
@@ -70,6 +69,8 @@ Connect the physical hardware:
 - R1 Gi0/0 ↔ R2 Gi0/0 (crossover or via patch panel)
 - R2 Gi0/1 → Server PC
 - Console cables from your laptop to R1 and R2 (for initial config)
+
+> **No dedicated monitor PC needed.** Wireshark will run directly on Client 2, capturing its own NIC traffic during the benchmark (Step 12).
 
 **Expected:** All link LEDs on the switch and router interfaces are green (amber during negotiation is normal — wait 30 seconds).
 
@@ -208,27 +209,16 @@ Both interfaces **up/up**, SSH version 2.0 enabled.
 
 ---
 
-### STEP 4 — Configure SW1 SPAN port
+### STEP 4 — Verify SW1 (no configuration needed)
 
-Connect to SW1 via console and run:
+SW1 requires no configuration — it operates as a basic Layer 2 switch out of the box. Simply confirm all ports have link (green LEDs) after connecting the cables from Step 1.
 
+Optionally connect a console cable and run:
 ```
-enable
-configure terminal
-hostname SW1
-monitor session 1 source interface GigabitEthernet0/1 both
-monitor session 1 destination interface GigabitEthernet0/10
-end
-write memory
+show interfaces status
 ```
 
-**Expected:** No errors. `GigabitEthernet0/10` will now mirror all traffic on the uplink — connect your Wireshark laptop here.
-
-Verify with:
-```
-show monitor session 1
-```
-Should list source and destination interfaces.
+**Expected:** Ports connected to Client 1, Client 2, and R1 Gi0/1 should show **connected** status. Ports with nothing plugged in will show **notconnect** — that is normal.
 
 ---
 
@@ -287,9 +277,11 @@ ping 192.165.20.79   # Server — tests full end-to-end path
 
 Also test SSH from a client to R1:
 ```powershell
-ssh admin@192.165.10.37
+ssh -oKexAlgorithms=+diffie-hellman-group14-sha1 admin@192.165.10.37
 # password: admin123
 ```
+
+> **Why the extra flag?** The Cisco 2901 only advertises legacy key-exchange methods (`diffie-hellman-group14-sha1`, `group1-sha1`). Modern Windows OpenSSH disables these by default. The `-oKexAlgorithms=+diffie-hellman-group14-sha1` flag re-enables the safest of the three so the handshake succeeds. You need this flag every time you SSH to either router from a Windows client.
 
 **Expected:** You land at `R1#` prompt. Type `exit` to disconnect.
 
@@ -406,13 +398,16 @@ Invoke-WebRequest -Uri https://192.165.20.79:8443 -SkipCertificateCheck -UseBasi
 
 ---
 
-### STEP 12 — Start Wireshark (on Monitor PC connected to SPAN port)
+### STEP 12 — Start Wireshark (on Client 2 — before running the benchmark)
 
-1. Open Wireshark, select the interface connected to SW1 Gi0/10 (the SPAN port).
-2. Apply the display filter: `tcp.port == 80 || tcp.port == 443`
-3. Start capturing — leave it running during Steps 13–14.
+Client 2 will both generate the benchmark traffic (Step 15) and capture it with Wireshark at the same time.
 
-**Expected:** Once traffic is generated in the next steps you will see TCP packets labeled with source/destination IPs from the `192.165.10.x` and `192.165.20.x` subnets.
+1. Open Wireshark on Client 2.
+2. Select the **Ethernet** adapter (the one with IP `192.165.10.79`).
+3. Apply the capture filter: `tcp port 80 or tcp port 443`
+4. Click **Start** — leave it running through Steps 13–15.
+
+**Expected:** Once `performance_metrics.py` starts in Step 15, you will immediately see TCP traffic appear. HTTP packets (port 80) will show readable request/response data in the packet details pane. HTTPS packets (port 443) will show encrypted `Application Data` records — no readable content visible. This contrast is the core observation for your report.
 
 ---
 
@@ -554,7 +549,7 @@ SSH to each router and save the running configuration to the `configs/` folder.
 
 **From Client 1:**
 ```powershell
-ssh admin@192.165.10.37
+ssh -oKexAlgorithms=+diffie-hellman-group14-sha1 admin@192.165.10.37
 # password: admin123
 # at the R1# prompt:
 show running-config
@@ -563,7 +558,7 @@ Copy the full output and paste into `configs/R1_config.txt`.
 
 Repeat for R2:
 ```powershell
-ssh admin@192.165.20.37
+ssh -oKexAlgorithms=+diffie-hellman-group14-sha1 admin@192.165.20.37
 # at the R2# prompt:
 show running-config
 ```
