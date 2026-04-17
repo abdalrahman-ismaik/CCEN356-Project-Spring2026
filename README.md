@@ -385,7 +385,7 @@ From **Client 1 or Client 2**, test both protocols:
 curl http://192.165.20.79
 
 # HTTPS (self-signed cert — -k skips verification)
-curl -k https://192.165.20.79:8443
+curl.exe -k https://192.165.20.79:8443
 ```
 
 Or using PowerShell's `Invoke-WebRequest`:
