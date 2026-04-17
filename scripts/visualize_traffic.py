@@ -22,7 +22,16 @@ def plot_response_comparison(metrics_file=None):
     if metrics_file is None:
         metrics_file = os.path.join(DATA_DIR, 'performance_results.csv')
 
+    if not os.path.exists(metrics_file):
+        print(f"Skipped performance chart: missing file {metrics_file}")
+        print("Run: python scripts/performance_metrics.py")
+        return False
+
     df = pd.read_csv(metrics_file)
+
+    if df.empty:
+        print(f"Skipped performance chart: no rows in {metrics_file}")
+        return False
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     fig.suptitle('HTTP vs HTTPS Performance Comparison', fontsize=14, fontweight='bold')
@@ -61,6 +70,7 @@ def plot_response_comparison(metrics_file=None):
     plt.savefig(output, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"Chart saved: {output}")
+    return True
 
 
 def plot_traffic_over_time(traffic_file=None):
@@ -68,7 +78,16 @@ def plot_traffic_over_time(traffic_file=None):
     if traffic_file is None:
         traffic_file = os.path.join(DATA_DIR, 'traffic_log.csv')
 
+    if not os.path.exists(traffic_file):
+        print(f"Skipped traffic chart: missing file {traffic_file}")
+        print("Run: python scripts/capture_traffic.py")
+        return False
+
     df = pd.read_csv(traffic_file)
+
+    if df.empty:
+        print(f"Skipped traffic chart: no rows in {traffic_file}")
+        return False
 
     http_df = df[df['protocol'] == 'HTTP']
     https_df = df[df['protocol'] == 'HTTPS']
@@ -98,8 +117,12 @@ def plot_traffic_over_time(traffic_file=None):
     plt.savefig(output, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"Chart saved: {output}")
+    return True
 
 
 if __name__ == '__main__':
-    plot_response_comparison()
-    plot_traffic_over_time()
+    perf_ok = plot_response_comparison()
+    traffic_ok = plot_traffic_over_time()
+
+    if not perf_ok and not traffic_ok:
+        print("No charts generated. Ensure data files exist in the data directory.")
