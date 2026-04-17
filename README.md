@@ -149,10 +149,13 @@ Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ServerAddresses 8.8.8.8
 
 **Client 1 PC — Static IP (PowerShell as Administrator):**
 ```powershell
-Remove-NetIPAddress -InterfaceAlias "Ethernet" -Confirm:$false -ErrorAction SilentlyContinue
-Remove-NetRoute -InterfaceAlias "Ethernet" -Confirm:$false -ErrorAction SilentlyContinue
-New-NetIPAddress -InterfaceAlias "Ethernet" -IPAddress 192.165.10.92 -PrefixLength 24 -DefaultGateway 192.165.10.37
-Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ServerAddresses 8.8.8.8
+Get-NetAdapter | Select-Object Name, InterfaceDescription, Status
+$iface = "Ethernet 5"   # replace with the adapter alias shown above
+
+Remove-NetIPAddress -InterfaceAlias $iface -Confirm:$false -ErrorAction SilentlyContinue
+Remove-NetRoute -InterfaceAlias $iface -Confirm:$false -ErrorAction SilentlyContinue
+New-NetIPAddress -InterfaceAlias $iface -IPAddress 192.165.10.92 -PrefixLength 24 -DefaultGateway 192.165.10.37
+Set-DnsClientServerAddress -InterfaceAlias $iface -ServerAddresses 8.8.8.8
 ```
 
 **Client 2 PC — Static IP (PowerShell as Administrator):**
