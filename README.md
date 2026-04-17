@@ -15,6 +15,18 @@ Compare HTTP vs HTTPS performance using physical Cisco networking equipment, Pyt
                             └── (SPAN port)
 ```
 
+## IP Addressing Quick Reference
+
+| Device | IP Address | Subnet Mask | Default Gateway | DNS |
+|---|---|---|---|---|
+| **Server** | 192.165.20.79 | 255.255.255.0 | 192.165.20.37 | 8.8.8.8 |
+| **Client 1** | 192.165.10.92 | 255.255.255.0 | 192.165.10.37 | 8.8.8.8 |
+| **Client 2** | 192.165.10.79 | 255.255.255.0 | 192.165.10.37 | 8.8.8.8 |
+| **R1 Gi0/0** (WAN) | 10.1.5.21 | 255.255.255.252 | — | — |
+| **R1 Gi0/1** (LAN) | 192.165.10.37 | 255.255.255.0 | — | — |
+| **R2 Gi0/0** (WAN) | 10.1.5.22 | 255.255.255.252 | — | — |
+| **R2 Gi0/1** (LAN) | 192.165.20.37 | 255.255.255.0 | — | — |
+
 ## Setup
 
 ### 0. Configure Cisco Routers (via console cable)
