@@ -41,7 +41,7 @@ Compare HTTP vs HTTPS performance using physical Cisco networking equipment, Pyt
 │   └── dashboard.py              # Flask live dashboard
 ├── server/
 │   ├── http_server.py            # Flask HTTP (port 80)
-│   ├── secured_server.py         # Flask HTTPS (port 8443)
+│   ├── secured_server.py         # Flask HTTPS (port 443)
 │   └── templates/
 │       ├── index.html
 │       └── show.html
@@ -341,7 +341,7 @@ Run **PowerShell as Administrator** on the Server PC:
 
 ```powershell
 New-NetFirewallRule -DisplayName "CCEN356 HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
-New-NetFirewallRule -DisplayName "CCEN356 HTTPS" -Direction Inbound -LocalPort 443,8443 -Protocol TCP -Action Allow
+New-NetFirewallRule -DisplayName "CCEN356 HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow
 New-NetFirewallRule -DisplayName "CCEN356 Allow Ping" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow
 ```
 
@@ -362,7 +362,7 @@ Open **two separate PowerShell terminals** on the Server PC and run one command 
 python server\http_server.py
 ```
 
-**Terminal 2 — HTTPS server:**
+**Terminal 2 — HTTPS server (run as Administrator for port 443):**
 ```powershell
 python server\secured_server.py
 ```
@@ -370,7 +370,7 @@ python server\secured_server.py
 **Expected:** Each terminal should print something like:
 ```
 * Running on http://0.0.0.0:80
-* Running on https://0.0.0.0:8443
+* Running on https://0.0.0.0:443
 ```
 Both servers stay running — do not close these terminals.
 
@@ -385,13 +385,13 @@ From **Client 1 or Client 2**, test both protocols:
 curl http://192.165.20.79
 
 # HTTPS (self-signed cert — -k skips verification)
-curl.exe -k https://192.165.20.79:8443
+curl -k https://192.165.20.79
 ```
 
 Or using PowerShell's `Invoke-WebRequest`:
 ```powershell
 Invoke-WebRequest -Uri http://192.165.20.79 -UseBasicParsing
-Invoke-WebRequest -Uri https://192.165.20.79:8443 -SkipCertificateCheck -UseBasicParsing
+Invoke-WebRequest -Uri https://192.165.20.79 -SkipCertificateCheck -UseBasicParsing
 ```
 
 **Expected:** Both return `StatusCode: 200` and an HTML body. If HTTP times out, re-check the firewall rule from Step 9. If HTTPS fails with a connection error, confirm `secured_server.py` is still running and `cert.pem`/`key.pem` exist.

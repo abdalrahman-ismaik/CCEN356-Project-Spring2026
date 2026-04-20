@@ -1,5 +1,5 @@
 """
-Secured HTTPS Server — Flask HTTPS on port 8443 with security headers.
+Secured HTTPS Server — Flask HTTPS on port 443 with security headers.
 
 Generate certificates first (Git Bash, WSL, or OpenSSL for Windows):
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 ^
@@ -83,5 +83,5 @@ if __name__ == '__main__':
         print('    -subj "/CN=192.165.20.79/O=CCEN356Lab"')
         exit(1)
 
-    print("HTTPS server starting on https://0.0.0.0:8443")
-    app.run(host='0.0.0.0', port=8443, ssl_context=(cert_path, key_path))
+    print("HTTPS server starting on https://0.0.0.0:443")
+    app.run(host='0.0.0.0', port=443, ssl_context=(cert_path, key_path))
