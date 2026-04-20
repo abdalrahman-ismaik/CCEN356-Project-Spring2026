@@ -53,18 +53,40 @@ def save_to_csv(filename):
 if __name__ == '__main__':
     output_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'traffic_log.csv')
 
-    # Auto-detect interface: prefer Ethernet, fall back to first available
-    ifaces = get_if_list()
-    iface = None
-    for name in ifaces:
-        if 'ethernet' in name.lower() or 'eth' in name.lower():
-            iface = name
-            break
-    if iface is None:
-        iface = ifaces[0] if ifaces else 'Ethernet'
+    # Show all available interfaces so user can verify the correct one
+    from scapy.all import conf, IFACES
+    print("Available interfaces:")
+    for i, (idx, iface_obj) in enumerate(IFACES.items()):
+        print(f"  [{i}] {iface_obj.name} — {iface_obj.description} (IP: {iface_obj.ip})")
+    print()
 
-    print(f"Starting capture on interface '{iface}' for 60 seconds...")
+    # Pick the interface whose IP matches this client's address
+    CLIENT_IPS = ['192.165.10.92', '192.165.10.79']
+    iface = None
+    for idx, iface_obj in IFACES.items():
+        if iface_obj.ip in CLIENT_IPS:
+            iface = iface_obj.name
+            print(f"Auto-selected interface: {iface} (IP: {iface_obj.ip})")
+            break
+
+    # Fallback: try matching by description keywords
+    if iface is None:
+        for idx, iface_obj in IFACES.items():
+            desc = (iface_obj.description or '').lower()
+            if 'ethernet' in desc or 'realtek' in desc or 'intel' in desc:
+                if iface_obj.ip and iface_obj.ip != '0.0.0.0' and iface_obj.ip != '127.0.0.1':
+                    iface = iface_obj.name
+                    print(f"Fallback-selected interface: {iface} (IP: {iface_obj.ip}, {iface_obj.description})")
+                    break
+
+    if iface is None:
+        ifaces = get_if_list()
+        iface = ifaces[0] if ifaces else 'Ethernet'
+        print(f"Warning: Could not auto-detect — using '{iface}'. If 0 packets are captured, re-run with the correct interface name.")
+
+    print(f"\nStarting capture on interface '{iface}' for 60 seconds...")
     print("Filtering HTTP (port 80) and HTTPS (port 443)\n")
 
-    sniff(iface=iface, prn=packet_callback, timeout=60)
+    sniff(iface=iface, prn=packet_callback, timeout=60,
+          filter="tcp port 80 or tcp port 443")
     save_to_csv(output_file)
