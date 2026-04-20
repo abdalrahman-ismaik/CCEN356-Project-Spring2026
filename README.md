@@ -303,35 +303,73 @@ pip install -r requirements.txt
 
 Run this from the project root on the **Server PC**:
 
-**Option A — Python (recommended, no extra tools needed):**
+**Option A — Python (SAN-enabled for modern browsers):**
 ```powershell
 cd server
 python -c "
 from OpenSSL import crypto
 k = crypto.PKey(); k.generate_key(crypto.TYPE_RSA, 2048)
 c = crypto.X509()
+c.set_version(2)
 c.get_subject().CN = '192.165.20.79'; c.get_subject().O = 'CCEN356Lab'
 c.set_serial_number(1000); c.gmtime_adj_notBefore(0); c.gmtime_adj_notAfter(365*24*60*60)
-c.set_issuer(c.get_subject()); c.set_pubkey(k); c.sign(k, 'sha256')
+c.set_issuer(c.get_subject()); c.set_pubkey(k)
+c.add_extensions([
+    crypto.X509Extension(b'basicConstraints', True, b'CA:FALSE'),
+    crypto.X509Extension(b'keyUsage', True, b'digitalSignature,keyEncipherment'),
+    crypto.X509Extension(b'extendedKeyUsage', False, b'serverAuth'),
+    crypto.X509Extension(b'subjectAltName', False, b'IP:192.165.20.79')
+])
+c.sign(k, 'sha256')
 open('cert.pem','wb').write(crypto.dump_certificate(crypto.FILETYPE_PEM, c))
 open('key.pem','wb').write(crypto.dump_privatekey(crypto.FILETYPE_PEM, k))
-print('Generated cert.pem and key.pem')
+print('Generated SAN-enabled cert.pem and key.pem')
 "
 ```
 
-**Option B — OpenSSL CLI (Git Bash or WSL):**
+**Option B — OpenSSL CLI (SAN-enabled, Git Bash/WSL/OpenSSL for Windows):**
 ```bash
 cd server
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+openssl req -x509 -newkey rsa:2048 -sha256 -days 365 -nodes \
   -keyout key.pem -out cert.pem \
-  -subj "/CN=192.165.20.79/O=CCEN356Lab"
+  -subj "/CN=192.165.20.79/O=CCEN356Lab" \
+  -addext "subjectAltName=IP:192.165.20.79" \
+  -addext "extendedKeyUsage=serverAuth"
 ```
 
-**Expected:** The message `Generated cert.pem and key.pem` (Option A) or a key generation progress line (Option B). Two files must exist afterward:
+**Expected:** The message `Generated SAN-enabled cert.pem and key.pem` (Option A) or a key generation progress line (Option B). Two files must exist afterward:
 ```powershell
 Test-Path server\cert.pem   # should print True
 Test-Path server\key.pem    # should print True
 ```
+
+Then restart the HTTPS server so it loads the new files:
+```powershell
+python server\secured_server.py
+```
+
+### STEP 8.1 — Trust the server certificate on each Client PC (for browser lock icon)
+
+Copy `server\cert.pem` from the Server PC to each Client PC (or use the shared project folder if both clients already have it).
+
+On each Client PC, run one of the following PowerShell commands:
+
+**Option A — Current user trust store (no Administrator required):**
+```powershell
+certutil -user -addstore -f Root "C:\Users\narut\Downloads\CCEN356-Project-Spring2026\server\cert.pem"
+```
+
+**Option B — Local machine trust store (Administrator PowerShell):**
+```powershell
+certutil -addstore -f Root "C:\Users\narut\Downloads\CCEN356-Project-Spring2026\server\cert.pem"
+```
+
+Verify the cert is present:
+```powershell
+certutil -store -user Root | findstr /i "CCEN356 192.165.20.79"
+```
+
+Then fully close and reopen the browser before testing `https://192.165.20.79` again. If you previously clicked "Proceed (unsafe)", click "Turn on warnings" first, then reload.
 
 ---
 
