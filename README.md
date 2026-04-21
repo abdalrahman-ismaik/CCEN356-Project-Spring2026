@@ -588,18 +588,22 @@ Then open: **http://localhost:5000** on that same client.
 
 **Real-time defaults (current):**
 
-- Poll interval: **1.0s**
+- Poll interval: **0.5s**
 - Request timeout: **1.5s**
-- HTTP/HTTPS probes run concurrently each cycle
+- Dashboard continuously samples **two profiles** each cycle:
+  - `without_qos` (baseline)
+  - `with_qos` (sends `X-CCEN356-QOS-MODE: on` to both servers)
 
 **Expected (advanced dashboard):**
 
+- Top-right toggle to switch **Without QoS** vs **With QoS** view instantly
 - KPI cards for HTTP avg, HTTPS avg, latency delta, and fastest protocol
 - Real-time latency timeline
 - Avg/P95/P99 comparison chart
 - Reliability chart (uptime + failures)
 - Performance profile radar (latency, tail, jitter, availability, consistency)
 - Endpoint status matrix with last status code, last latency, checks/failures, and last error
+- Status strip includes live **QoS Impact** (delta shift between with/without QoS)
 - If internet/CDN access is blocked, charts still render using the built-in offline canvas renderer (no external Chart.js dependency required)
 
 - If both monitored targets are reachable, status badges show **UP**.
@@ -658,6 +662,17 @@ $env:CCEN356_POLL_INTERVAL_SEC="0.8"
 $env:CCEN356_REQUEST_TIMEOUT_SEC="1.2"
 $env:CCEN356_DASHBOARD_MAX_SAMPLES="360"
 python scripts/dashboard.py
+```
+
+Optional QoS-priority tuning (set these before starting Step 10 servers):
+```powershell
+# HTTP server terminal (plain HTTP gets extra delay when QoS mode is ON)
+$env:CCEN356_QOS_HTTP_DELAY_MS="25"
+python server\http_server.py
+
+# HTTPS server terminal (keep at 0 for priority, or tune if needed)
+$env:CCEN356_QOS_HTTPS_DELAY_MS="0"
+python server\secured_server.py
 ```
 
 If your HTTPS server is running on **8443** instead of **443**, set fallback ports before launch:

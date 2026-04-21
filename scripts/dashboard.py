@@ -37,6 +37,24 @@ POLL_INTERVAL_SEC = float(os.getenv("CCEN356_POLL_INTERVAL_SEC", "0.5"))
 REQUEST_TIMEOUT_SEC = float(os.getenv("CCEN356_REQUEST_TIMEOUT_SEC", "1.5"))
 MAX_SAMPLES = int(os.getenv("CCEN356_DASHBOARD_MAX_SAMPLES", "240"))
 
+QOS_MODE_HEADER = os.getenv("CCEN356_QOS_MODE_HEADER", "X-CCEN356-QOS-MODE")
+QOS_MODE_VALUE = os.getenv("CCEN356_QOS_MODE_VALUE", "on")
+DEFAULT_VIEW_MODE = os.getenv("CCEN356_DASHBOARD_VIEW_MODE", "without_qos").strip().lower()
+
+DASHBOARD_MODES = {
+    "without_qos": {
+        "label": "Without QoS",
+        "qos_enabled": False,
+    },
+    "with_qos": {
+        "label": "With QoS",
+        "qos_enabled": True,
+    },
+}
+
+if DEFAULT_VIEW_MODE not in DASHBOARD_MODES:
+    DEFAULT_VIEW_MODE = "without_qos"
+
 
 def _safe_parse_ports(raw_value, defaults):
     """Parse comma-separated port list from environment variable."""
@@ -116,18 +134,26 @@ def _new_endpoint_state(target_url, candidates, verify_tls):
     }
 
 
+def _new_profile_state():
+    return {
+        "timeline": {
+            "labels": deque(maxlen=MAX_SAMPLES),
+            "http_ms": deque(maxlen=MAX_SAMPLES),
+            "https_ms": deque(maxlen=MAX_SAMPLES),
+        },
+        "endpoints": {
+            "http": _new_endpoint_state(HTTP_TARGET, HTTP_CANDIDATES, verify_tls=False),
+            "https": _new_endpoint_state(HTTPS_TARGET, HTTPS_CANDIDATES, verify_tls=False),
+        },
+    }
+
+
 METRICS_LOCK = threading.Lock()
-PROBE_EXECUTOR = ThreadPoolExecutor(max_workers=2)
+PROBE_EXECUTOR = ThreadPoolExecutor(max_workers=max(4, len(DASHBOARD_MODES) * 2))
 DASHBOARD_STATE = {
     "started_at": time.time(),
-    "timeline": {
-        "labels": deque(maxlen=MAX_SAMPLES),
-        "http_ms": deque(maxlen=MAX_SAMPLES),
-        "https_ms": deque(maxlen=MAX_SAMPLES),
-    },
-    "endpoints": {
-        "http": _new_endpoint_state(HTTP_TARGET, HTTP_CANDIDATES, verify_tls=False),
-        "https": _new_endpoint_state(HTTPS_TARGET, HTTPS_CANDIDATES, verify_tls=False),
+    "profiles": {
+        key: _new_profile_state() for key in DASHBOARD_MODES
     },
 }
 
@@ -207,10 +233,11 @@ def _summarize(endpoint_state):
     }
 
 
-def _probe_target(url, verify_tls):
+def _probe_target(url, verify_tls, qos_enabled):
     start = time.perf_counter()
     try:
-        response = requests.get(url, timeout=REQUEST_TIMEOUT_SEC, verify=verify_tls)
+        headers = {QOS_MODE_HEADER: QOS_MODE_VALUE} if qos_enabled else None
+        response = requests.get(url, timeout=REQUEST_TIMEOUT_SEC, verify=verify_tls, headers=headers)
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         return {
             "ok": True,
@@ -227,7 +254,7 @@ def _probe_target(url, verify_tls):
         }
 
 
-def _probe_endpoint(endpoint_state):
+def _probe_endpoint(endpoint_state, qos_enabled):
     """Probe the active target first, then fallback candidates until one succeeds."""
     ordered_candidates = [endpoint_state["target"]] + [
         url for url in endpoint_state["candidates"] if url != endpoint_state["target"]
@@ -235,7 +262,7 @@ def _probe_endpoint(endpoint_state):
 
     errors = []
     for index, candidate in enumerate(ordered_candidates):
-        result = _probe_target(candidate, verify_tls=endpoint_state["verify_tls"])
+        result = _probe_target(candidate, verify_tls=endpoint_state["verify_tls"], qos_enabled=qos_enabled)
         if result["ok"]:
             result["target"] = candidate
             result["failover_used"] = index > 0
@@ -254,71 +281,90 @@ def _probe_endpoint(endpoint_state):
 
 
 def background_collector():
-    """Continuously probe HTTP/HTTPS targets and update shared dashboard state."""
+    """Continuously probe baseline and QoS-priority profiles for HTTP/HTTPS targets."""
     while True:
         timestamp_label = datetime.now().strftime("%H:%M:%S")
-        future_map = {
-            key: PROBE_EXECUTOR.submit(_probe_endpoint, DASHBOARD_STATE["endpoints"][key])
-            for key in ("http", "https")
+        future_map = {}
+        for mode_key, mode_meta in DASHBOARD_MODES.items():
+            profile = DASHBOARD_STATE["profiles"][mode_key]
+            for protocol_key in ("http", "https"):
+                future_map[(mode_key, protocol_key)] = PROBE_EXECUTOR.submit(
+                    _probe_endpoint,
+                    profile["endpoints"][protocol_key],
+                    mode_meta["qos_enabled"],
+                )
+
+        cycle = {
+            key: future_map[key].result() for key in future_map
         }
-        cycle = {key: future_map[key].result() for key in ("http", "https")}
 
         with METRICS_LOCK:
-            DASHBOARD_STATE["timeline"]["labels"].append(timestamp_label)
-            DASHBOARD_STATE["timeline"]["http_ms"].append(cycle["http"]["latency_ms"])
-            DASHBOARD_STATE["timeline"]["https_ms"].append(cycle["https"]["latency_ms"])
+            for mode_key in DASHBOARD_MODES:
+                profile = DASHBOARD_STATE["profiles"][mode_key]
+                profile["timeline"]["labels"].append(timestamp_label)
+                profile["timeline"]["http_ms"].append(cycle[(mode_key, "http")]["latency_ms"])
+                profile["timeline"]["https_ms"].append(cycle[(mode_key, "https")]["latency_ms"])
 
-            for key in ("http", "https"):
-                endpoint = DASHBOARD_STATE["endpoints"][key]
-                result = cycle[key]
-                endpoint["checks"] += 1
-                endpoint["last_error"] = result["error"]
-                endpoint["last_status_code"] = result["status_code"]
-                endpoint["last_latency_ms"] = result["latency_ms"]
-                endpoint["last_check_at"] = timestamp_label
-                endpoint["is_up"] = bool(result["ok"])
-                if result.get("target") and result["target"] != endpoint["target"]:
-                    endpoint["target"] = result["target"]
-                    endpoint["failover_hits"] += 1
+                for protocol_key in ("http", "https"):
+                    endpoint = profile["endpoints"][protocol_key]
+                    result = cycle[(mode_key, protocol_key)]
+                    endpoint["checks"] += 1
+                    endpoint["last_error"] = result["error"]
+                    endpoint["last_status_code"] = result["status_code"]
+                    endpoint["last_latency_ms"] = result["latency_ms"]
+                    endpoint["last_check_at"] = timestamp_label
+                    endpoint["is_up"] = bool(result["ok"])
+                    if result.get("target") and result["target"] != endpoint["target"]:
+                        endpoint["target"] = result["target"]
+                        endpoint["failover_hits"] += 1
 
-                if result["ok"] and result["latency_ms"] is not None:
-                    endpoint["successes"] += 1
-                    endpoint["latencies"].append(result["latency_ms"])
-                else:
-                    endpoint["failures"] += 1
+                    if result["ok"] and result["latency_ms"] is not None:
+                        endpoint["successes"] += 1
+                        endpoint["latencies"].append(result["latency_ms"])
+                    else:
+                        endpoint["failures"] += 1
 
         time.sleep(POLL_INTERVAL_SEC)
 
 
 def _snapshot_state():
     with METRICS_LOCK:
-        timeline = {
-            "labels": list(DASHBOARD_STATE["timeline"]["labels"]),
-            "http_ms": [x if x is not None else None for x in DASHBOARD_STATE["timeline"]["http_ms"]],
-            "https_ms": [x if x is not None else None for x in DASHBOARD_STATE["timeline"]["https_ms"]],
-        }
-
-        endpoints = {}
-        for key, endpoint in DASHBOARD_STATE["endpoints"].items():
-            endpoints[key] = {
-                "target": endpoint["target"],
-                "candidates": list(endpoint["candidates"]),
-                "failover_hits": endpoint["failover_hits"],
-                "checks": endpoint["checks"],
-                "successes": endpoint["successes"],
-                "failures": endpoint["failures"],
-                "last_error": endpoint["last_error"],
-                "last_status_code": endpoint["last_status_code"],
-                "last_latency_ms": endpoint["last_latency_ms"],
-                "last_check_at": endpoint["last_check_at"],
-                "is_up": endpoint["is_up"],
-                "latencies": list(endpoint["latencies"]),
+        profiles = {}
+        for mode_key, profile in DASHBOARD_STATE["profiles"].items():
+            timeline = {
+                "labels": list(profile["timeline"]["labels"]),
+                "http_ms": [x if x is not None else None for x in profile["timeline"]["http_ms"]],
+                "https_ms": [x if x is not None else None for x in profile["timeline"]["https_ms"]],
             }
-    return timeline, endpoints
+
+            endpoints = {}
+            for protocol_key, endpoint in profile["endpoints"].items():
+                endpoints[protocol_key] = {
+                    "target": endpoint["target"],
+                    "candidates": list(endpoint["candidates"]),
+                    "failover_hits": endpoint["failover_hits"],
+                    "checks": endpoint["checks"],
+                    "successes": endpoint["successes"],
+                    "failures": endpoint["failures"],
+                    "last_error": endpoint["last_error"],
+                    "last_status_code": endpoint["last_status_code"],
+                    "last_latency_ms": endpoint["last_latency_ms"],
+                    "last_check_at": endpoint["last_check_at"],
+                    "is_up": endpoint["is_up"],
+                    "latencies": list(endpoint["latencies"]),
+                }
+
+            profiles[mode_key] = {
+                "timeline": timeline,
+                "endpoints": endpoints,
+            }
+
+    return profiles
 
 
-def _build_payload():
-    timeline, endpoints = _snapshot_state()
+def _build_profile_payload(mode_key, profile_snapshot):
+    timeline = profile_snapshot["timeline"]
+    endpoints = profile_snapshot["endpoints"]
 
     http_summary = _summarize(endpoints["http"])
     https_summary = _summarize(endpoints["https"])
@@ -332,15 +378,10 @@ def _build_payload():
     else:
         faster_protocol = "HTTP" if http_summary["avg_ms"] <= https_summary["avg_ms"] else "HTTPS"
 
-    payload = {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "dashboard": {
-            "poll_interval_sec": POLL_INTERVAL_SEC,
-            "max_samples": MAX_SAMPLES,
-            "uptime_sec": int(time.time() - DASHBOARD_STATE["started_at"]),
-            "host": DASHBOARD_HOST,
-            "port": DASHBOARD_PORT,
-        },
+    return {
+        "mode": mode_key,
+        "label": DASHBOARD_MODES[mode_key]["label"],
+        "qos_enabled": DASHBOARD_MODES[mode_key]["qos_enabled"],
         "targets": {
             "http": endpoints["http"]["target"],
             "https": endpoints["https"]["target"],
@@ -374,23 +415,67 @@ def _build_payload():
             "jitter_delta_ms": jitter_delta,
             "faster_protocol": faster_protocol,
         },
+    }
+
+
+def _build_payload():
+    profile_snapshots = _snapshot_state()
+    profiles = {
+        mode_key: _build_profile_payload(mode_key, profile_snapshots[mode_key])
+        for mode_key in DASHBOARD_MODES
+    }
+
+    without_qos = profiles["without_qos"]
+    with_qos = profiles["with_qos"]
+
+    mode_comparison = {
+        "http_avg_change_ms": _round_or_zero(with_qos["http"]["avg_ms"] - without_qos["http"]["avg_ms"], 2),
+        "https_avg_change_ms": _round_or_zero(with_qos["https"]["avg_ms"] - without_qos["https"]["avg_ms"], 2),
+        "delta_shift_ms": _round_or_zero(with_qos["comparison"]["avg_delta_ms"] - without_qos["comparison"]["avg_delta_ms"], 2),
+        "without_qos_faster_protocol": without_qos["comparison"]["faster_protocol"],
+        "with_qos_faster_protocol": with_qos["comparison"]["faster_protocol"],
+    }
+
+    active_mode = DEFAULT_VIEW_MODE if DEFAULT_VIEW_MODE in profiles else "without_qos"
+    active_profile = profiles[active_mode]
+
+    payload = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "dashboard": {
+            "poll_interval_sec": POLL_INTERVAL_SEC,
+            "max_samples": MAX_SAMPLES,
+            "uptime_sec": int(time.time() - DASHBOARD_STATE["started_at"]),
+            "host": DASHBOARD_HOST,
+            "port": DASHBOARD_PORT,
+            "default_view_mode": active_mode,
+            "available_modes": list(DASHBOARD_MODES.keys()),
+            "qos_mode_header": QOS_MODE_HEADER,
+            "qos_mode_value": QOS_MODE_VALUE,
+        },
+        "profiles": profiles,
+        "mode_comparison": mode_comparison,
+        "targets": active_profile["targets"],
+        "timeline": active_profile["timeline"],
+        "http": active_profile["http"],
+        "https": active_profile["https"],
+        "comparison": active_profile["comparison"],
         # Backward-compatible keys for existing integrations.
-        "http_avg_ms": http_summary["avg_ms"],
-        "https_avg_ms": https_summary["avg_ms"],
-        "http_samples": http_summary["samples"],
-        "https_samples": https_summary["samples"],
+        "http_avg_ms": active_profile["http"]["avg_ms"],
+        "https_avg_ms": active_profile["https"]["avg_ms"],
+        "http_samples": active_profile["http"]["samples"],
+        "https_samples": active_profile["https"]["samples"],
         "http_status": {
-            "ok": endpoints["http"]["is_up"],
-            "last_error": endpoints["http"]["last_error"],
-            "last_status_code": endpoints["http"]["last_status_code"],
+            "ok": active_profile["http"]["is_up"],
+            "last_error": active_profile["http"]["last_error"],
+            "last_status_code": active_profile["http"]["last_status_code"],
         },
         "https_status": {
-            "ok": endpoints["https"]["is_up"],
-            "last_error": endpoints["https"]["last_error"],
-            "last_status_code": endpoints["https"]["last_status_code"],
+            "ok": active_profile["https"]["is_up"],
+            "last_error": active_profile["https"]["last_error"],
+            "last_status_code": active_profile["https"]["last_status_code"],
         },
-        "http_target": endpoints["http"]["target"],
-        "https_target": endpoints["https"]["target"],
+        "http_target": active_profile["http"]["target"],
+        "https_target": active_profile["https"]["target"],
     }
 
     return payload
@@ -477,6 +562,35 @@ DASHBOARD_HTML = """
             color: var(--ink-mid);
             text-align: right;
             font-size: 0.93rem;
+        }
+
+        .hero-tools {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 10px;
+        }
+
+        .mode-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            background: rgba(20, 36, 57, 0.9);
+            padding: 8px 12px;
+            color: var(--ink-mid);
+            font-size: 0.85rem;
+        }
+
+        .mode-toggle input {
+            accent-color: var(--https);
+            width: 16px;
+            height: 16px;
+        }
+
+        .mode-toggle strong {
+            color: var(--ink-strong);
         }
 
         .status-strip {
@@ -651,6 +765,7 @@ DASHBOARD_HTML = """
                 height: 300px;
                 min-height: 300px;
             }
+            .hero-tools { align-items: flex-start; }
             .timestamp { text-align: left; }
             .panel { padding: 14px; }
         }
@@ -663,7 +778,11 @@ DASHBOARD_HTML = """
                 <h1 class="title">CCEN356 Performance Command Center</h1>
                 <p class="subtitle">Real-time HTTP/HTTPS observability for benchmark runs and live lab demos.</p>
             </div>
-            <div>
+            <div class="hero-tools">
+                <label class="mode-toggle" for="qosModeToggle">
+                    <input type="checkbox" id="qosModeToggle" />
+                    <span><strong>QoS Priority Mode</strong> • <span id="qosModeState">Without QoS</span></span>
+                </label>
                 <div class="timestamp" id="clock">Loading...</div>
             </div>
         </section>
@@ -671,8 +790,10 @@ DASHBOARD_HTML = """
         <section class="panel status-strip">
             <div class="pill"><strong>HTTP Target:</strong> <span id="httpTarget">-</span></div>
             <div class="pill"><strong>HTTPS Target:</strong> <span id="httpsTarget">-</span></div>
+            <div class="pill"><strong>View Mode:</strong> <span id="viewMode">-</span></div>
             <div class="pill"><strong>Poll Interval:</strong> <span id="pollRate">-</span></div>
             <div class="pill"><strong>Dashboard Uptime:</strong> <span id="dashUptime">-</span></div>
+            <div class="pill"><strong>QoS Impact:</strong> <span id="qosImpact">-</span></div>
         </section>
 
         <section class="panel kpis">
@@ -755,6 +876,10 @@ DASHBOARD_HTML = """
             reliability: document.getElementById('reliabilityChart'),
             score: document.getElementById('scoreChart'),
         };
+
+        const modeToggle = document.getElementById('qosModeToggle');
+        const modeText = document.getElementById('qosModeState');
+        let dashboardModeReady = false;
 
         if (!chartLibraryAvailable) {
             const note = document.getElementById('noteBox');
@@ -1128,10 +1253,26 @@ DASHBOARD_HTML = """
             return '<span class="badge badge-down">DOWN</span>';
         }
 
-        function fillStatusTable(data) {
+        function selectedModeKey() {
+            return modeToggle.checked ? 'with_qos' : 'without_qos';
+        }
+
+        function selectedModeLabel(modeKey) {
+            return modeKey === 'with_qos' ? 'With QoS' : 'Without QoS';
+        }
+
+        function activeProfile(payload) {
+            const modeKey = selectedModeKey();
+            if (payload.profiles && payload.profiles[modeKey]) {
+                return payload.profiles[modeKey];
+            }
+            return payload;
+        }
+
+        function fillStatusTable(profileData) {
             const rows = [
-                { label: 'HTTP', payload: data.http },
-                { label: 'HTTPS', payload: data.https },
+                { label: 'HTTP', payload: profileData.http },
+                { label: 'HTTPS', payload: profileData.https },
             ];
             const tbody = document.getElementById('statusRows');
             tbody.innerHTML = rows.map(row => {
@@ -1156,25 +1297,53 @@ DASHBOARD_HTML = """
             }).join('');
         }
 
-        function updateNote(data) {
+        function updateNote(profileData, payload) {
             const note = document.getElementById('noteBox');
-            if (!data.http.is_up || !data.https.is_up) {
-                const httpTried = (data.targets.http_candidates || []).join(', ');
-                const httpsTried = (data.targets.https_candidates || []).join(', ');
-                note.textContent = `One or more targets are down. HTTP tried: [${httpTried}] | HTTPS tried: [${httpsTried}]`;
+            const modeKey = selectedModeKey();
+            const modeLabel = selectedModeLabel(modeKey);
+
+            if (!profileData.http.is_up || !profileData.https.is_up) {
+                const httpTried = (profileData.targets.http_candidates || []).join(', ');
+                const httpsTried = (profileData.targets.https_candidates || []).join(', ');
+                note.textContent = `${modeLabel}: one or more targets are down. HTTP tried: [${httpTried}] | HTTPS tried: [${httpsTried}]`;
                 return;
             }
-            note.textContent = `Both targets are reachable. Current avg delta (HTTPS - HTTP): ${toFixedSafe(data.comparison.avg_delta_ms, 2)} ms.`;
+
+            const shift = Number(payload.mode_comparison && payload.mode_comparison.delta_shift_ms);
+            const trend = Number.isFinite(shift)
+                ? (shift < 0 ? 'HTTPS gained priority' : (shift > 0 ? 'HTTPS lost priority' : 'no priority shift'))
+                : 'no comparison yet';
+            note.textContent = `${modeLabel}: avg delta (HTTPS - HTTP) is ${toFixedSafe(profileData.comparison.avg_delta_ms, 2)} ms. QoS shift: ${toFixedSafe(shift, 2)} ms (${trend}).`;
         }
 
-        function updateDashboard(data) {
-            window.__lastPayload = data;
-            document.getElementById('clock').textContent = `Last refresh: ${data.generated_at}`;
+        function updateDashboard(payload) {
+            window.__lastPayload = payload;
+
+            if (!dashboardModeReady && payload.dashboard && payload.dashboard.default_view_mode) {
+                modeToggle.checked = payload.dashboard.default_view_mode === 'with_qos';
+                dashboardModeReady = true;
+            }
+
+            const modeKey = selectedModeKey();
+            const modeLabel = selectedModeLabel(modeKey);
+            modeText.textContent = modeLabel;
+
+            const data = activeProfile(payload);
+
+            document.getElementById('clock').textContent = `Last refresh: ${payload.generated_at}`;
             document.getElementById('httpTarget').textContent = data.targets.http;
             document.getElementById('httpsTarget').textContent = data.targets.https;
-            document.getElementById('pollRate').textContent = `${toFixedSafe(data.dashboard.poll_interval_sec, 1)}s`;
-            document.getElementById('dashUptime').textContent = formatDuration(data.dashboard.uptime_sec);
-            refreshMs = Math.max(400, Math.round((data.dashboard.poll_interval_sec || 1) * 1000));
+            document.getElementById('viewMode').textContent = modeLabel;
+            document.getElementById('pollRate').textContent = `${toFixedSafe(payload.dashboard.poll_interval_sec, 1)}s`;
+            document.getElementById('dashUptime').textContent = formatDuration(payload.dashboard.uptime_sec);
+
+            const deltaShift = Number(payload.mode_comparison && payload.mode_comparison.delta_shift_ms);
+            const shiftText = Number.isFinite(deltaShift)
+                ? `${toFixedSafe(deltaShift, 2)} ms`
+                : 'n/a';
+            document.getElementById('qosImpact').textContent = shiftText;
+
+            refreshMs = Math.max(300, Math.round((payload.dashboard.poll_interval_sec || 1) * 1000));
 
             document.getElementById('httpAvg').textContent = `${toFixedSafe(data.http.avg_ms, 1)} ms`;
             document.getElementById('httpsAvg').textContent = `${toFixedSafe(data.https.avg_ms, 1)} ms`;
@@ -1225,7 +1394,7 @@ DASHBOARD_HTML = """
             }
 
             fillStatusTable(data);
-            updateNote(data);
+            updateNote(data, payload);
         }
 
         async function fetchMetrics() {
@@ -1238,18 +1407,26 @@ DASHBOARD_HTML = """
             }
         }
 
-        let refreshMs = 1000;
+        let refreshMs = 500;
 
         async function runLoop() {
             await fetchMetrics();
             window.setTimeout(runLoop, refreshMs);
         }
 
+        modeToggle.addEventListener('change', () => {
+            if (window.__lastPayload) {
+                updateDashboard(window.__lastPayload);
+            } else {
+                modeText.textContent = selectedModeLabel(selectedModeKey());
+            }
+        });
+
         runLoop();
 
         window.addEventListener('resize', () => {
             if (!chartLibraryAvailable && window.__lastPayload) {
-                renderFallbackCharts(window.__lastPayload);
+                updateDashboard(window.__lastPayload);
             }
         });
     </script>
@@ -1284,5 +1461,7 @@ if __name__ == "__main__":
     print(f"HTTP candidates: {', '.join(HTTP_CANDIDATES)}")
     print(f"HTTPS candidates: {', '.join(HTTPS_CANDIDATES)}")
     print(f"Poll interval: {POLL_INTERVAL_SEC}s | Timeout: {REQUEST_TIMEOUT_SEC}s")
+    print(f"QoS comparison modes: {', '.join(DASHBOARD_MODES.keys())}")
+    print(f"QoS probe header: {QOS_MODE_HEADER}={QOS_MODE_VALUE}")
 
     app.run(host=DASHBOARD_HOST, port=DASHBOARD_PORT, debug=False)
