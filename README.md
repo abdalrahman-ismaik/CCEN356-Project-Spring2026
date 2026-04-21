@@ -644,6 +644,14 @@ $env:CCEN356_DASHBOARD_PORT="5000"
 python scripts/dashboard.py
 ```
 
+If your HTTPS server is running on **8443** instead of **443**, set fallback ports before launch:
+```powershell
+$env:CCEN356_HTTPS_FALLBACK_PORTS="443,8443"
+python scripts/dashboard.py
+```
+
+Important: The live dashboard measures endpoint latency and health only. Packet capture is still performed by `scripts/capture_traffic.py` (Step 14, Administrator PowerShell).
+
 ---
 
 ### STEP 18 — Save Wireshark capture and screenshots

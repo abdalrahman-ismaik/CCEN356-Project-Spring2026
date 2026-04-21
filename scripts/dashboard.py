@@ -16,6 +16,7 @@ import os
 import statistics
 import threading
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 from flask import Flask, jsonify, render_template_string
 import requests
@@ -25,8 +26,9 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-HTTP_TARGET = os.getenv("CCEN356_HTTP_URL", "http://192.165.20.79")
-HTTPS_TARGET = os.getenv("CCEN356_HTTPS_URL", "https://192.165.20.79")
+DEFAULT_SERVER_HOST = os.getenv("CCEN356_SERVER_HOST", "192.165.20.79")
+HTTP_TARGET = os.getenv("CCEN356_HTTP_URL", f"http://{DEFAULT_SERVER_HOST}")
+HTTPS_TARGET = os.getenv("CCEN356_HTTPS_URL", f"https://{DEFAULT_SERVER_HOST}")
 
 DASHBOARD_HOST = os.getenv("CCEN356_DASHBOARD_HOST", "0.0.0.0")
 DASHBOARD_PORT = int(os.getenv("CCEN356_DASHBOARD_PORT", "5000"))
@@ -35,9 +37,67 @@ REQUEST_TIMEOUT_SEC = float(os.getenv("CCEN356_REQUEST_TIMEOUT_SEC", "6"))
 MAX_SAMPLES = int(os.getenv("CCEN356_DASHBOARD_MAX_SAMPLES", "240"))
 
 
-def _new_endpoint_state(target_url):
+def _safe_parse_ports(raw_value, defaults):
+    """Parse comma-separated port list from environment variable."""
+    ports = []
+    for chunk in str(raw_value).split(","):
+        text = chunk.strip()
+        if not text:
+            continue
+        if text.isdigit():
+            value = int(text)
+            if 1 <= value <= 65535 and value not in ports:
+                ports.append(value)
+    return ports or list(defaults)
+
+
+def _build_candidates(primary_url, scheme, candidate_ports):
+    """Build deduplicated endpoint candidates preserving host/path while trying fallback ports."""
+    seed_url = primary_url if "://" in primary_url else f"{scheme}://{primary_url}"
+    parsed = urlsplit(seed_url)
+
+    host = parsed.hostname or DEFAULT_SERVER_HOST
+    path = parsed.path if parsed.path else "/"
+    query = parsed.query
+
+    candidates = []
+
+    def add_candidate(hostname, port=None):
+        netloc = hostname if port is None else f"{hostname}:{port}"
+        url = urlunsplit((scheme, netloc, path, query, ""))
+        if url not in candidates:
+            candidates.append(url)
+
+    # Keep the user-specified URL first so explicit configuration always takes priority.
+    if seed_url not in candidates:
+        candidates.append(seed_url)
+
+    add_candidate(host, port=None)
+    for port in candidate_ports:
+        add_candidate(host, port=port)
+
+    return candidates
+
+
+HTTP_FALLBACK_PORTS = _safe_parse_ports(
+    os.getenv("CCEN356_HTTP_FALLBACK_PORTS", "80"),
+    defaults=[80],
+)
+HTTPS_FALLBACK_PORTS = _safe_parse_ports(
+    os.getenv("CCEN356_HTTPS_FALLBACK_PORTS", "443,8443"),
+    defaults=[443, 8443],
+)
+
+HTTP_CANDIDATES = _build_candidates(HTTP_TARGET, "http", HTTP_FALLBACK_PORTS)
+HTTPS_CANDIDATES = _build_candidates(HTTPS_TARGET, "https", HTTPS_FALLBACK_PORTS)
+
+
+def _new_endpoint_state(target_url, candidates, verify_tls):
     return {
         "target": target_url,
+        "candidates": list(candidates),
+        "verify_tls": verify_tls,
+        "failover_hits": 0,
         "checks": 0,
         "successes": 0,
         "failures": 0,
@@ -59,8 +119,8 @@ DASHBOARD_STATE = {
         "https_ms": deque(maxlen=MAX_SAMPLES),
     },
     "endpoints": {
-        "http": _new_endpoint_state(HTTP_TARGET),
-        "https": _new_endpoint_state(HTTPS_TARGET),
+        "http": _new_endpoint_state(HTTP_TARGET, HTTP_CANDIDATES, verify_tls=False),
+        "https": _new_endpoint_state(HTTPS_TARGET, HTTPS_CANDIDATES, verify_tls=False),
     },
 }
 
@@ -160,14 +220,40 @@ def _probe_target(url, verify_tls):
         }
 
 
+def _probe_endpoint(endpoint_state):
+    """Probe the active target first, then fallback candidates until one succeeds."""
+    ordered_candidates = [endpoint_state["target"]] + [
+        url for url in endpoint_state["candidates"] if url != endpoint_state["target"]
+    ]
+
+    errors = []
+    for index, candidate in enumerate(ordered_candidates):
+        result = _probe_target(candidate, verify_tls=endpoint_state["verify_tls"])
+        if result["ok"]:
+            result["target"] = candidate
+            result["failover_used"] = index > 0
+            return result
+        errors.append(f"{candidate} -> {result['error']}")
+
+    final_error = " | ".join(errors[:3]) if errors else "Unknown connection error"
+    return {
+        "ok": False,
+        "status_code": None,
+        "latency_ms": None,
+        "error": f"All endpoint candidates failed. {final_error}",
+        "target": endpoint_state["target"],
+        "failover_used": False,
+    }
+
+
 def background_collector():
     """Continuously probe HTTP/HTTPS targets and update shared dashboard state."""
     while True:
         timestamp_label = datetime.now().strftime("%H:%M:%S")
-        cycle = {
-            "http": _probe_target(HTTP_TARGET, verify_tls=False),
-            "https": _probe_target(HTTPS_TARGET, verify_tls=False),
-        }
+        cycle = {}
+        for key in ("http", "https"):
+            endpoint_state = DASHBOARD_STATE["endpoints"][key]
+            cycle[key] = _probe_endpoint(endpoint_state)
 
         with METRICS_LOCK:
             DASHBOARD_STATE["timeline"]["labels"].append(timestamp_label)
@@ -183,6 +269,9 @@ def background_collector():
                 endpoint["last_latency_ms"] = result["latency_ms"]
                 endpoint["last_check_at"] = timestamp_label
                 endpoint["is_up"] = bool(result["ok"])
+                if result.get("target") and result["target"] != endpoint["target"]:
+                    endpoint["target"] = result["target"]
+                    endpoint["failover_hits"] += 1
 
                 if result["ok"] and result["latency_ms"] is not None:
                     endpoint["successes"] += 1
@@ -205,6 +294,8 @@ def _snapshot_state():
         for key, endpoint in DASHBOARD_STATE["endpoints"].items():
             endpoints[key] = {
                 "target": endpoint["target"],
+                "candidates": list(endpoint["candidates"]),
+                "failover_hits": endpoint["failover_hits"],
                 "checks": endpoint["checks"],
                 "successes": endpoint["successes"],
                 "failures": endpoint["failures"],
@@ -242,11 +333,17 @@ def _build_payload():
             "host": DASHBOARD_HOST,
             "port": DASHBOARD_PORT,
         },
-        "targets": {"http": HTTP_TARGET, "https": HTTPS_TARGET},
+        "targets": {
+            "http": endpoints["http"]["target"],
+            "https": endpoints["https"]["target"],
+            "http_candidates": endpoints["http"]["candidates"],
+            "https_candidates": endpoints["https"]["candidates"],
+        },
         "timeline": timeline,
         "http": {
             **http_summary,
             "target": endpoints["http"]["target"],
+            "failover_hits": endpoints["http"]["failover_hits"],
             "is_up": endpoints["http"]["is_up"],
             "last_error": endpoints["http"]["last_error"],
             "last_status_code": endpoints["http"]["last_status_code"],
@@ -256,6 +353,7 @@ def _build_payload():
         "https": {
             **https_summary,
             "target": endpoints["https"]["target"],
+            "failover_hits": endpoints["https"]["failover_hits"],
             "is_up": endpoints["https"]["is_up"],
             "last_error": endpoints["https"]["last_error"],
             "last_status_code": endpoints["https"]["last_status_code"],
@@ -283,8 +381,8 @@ def _build_payload():
             "last_error": endpoints["https"]["last_error"],
             "last_status_code": endpoints["https"]["last_status_code"],
         },
-        "http_target": HTTP_TARGET,
-        "https_target": HTTPS_TARGET,
+        "http_target": endpoints["http"]["target"],
+        "https_target": endpoints["https"]["target"],
     }
 
     return payload
@@ -303,18 +401,19 @@ DASHBOARD_HTML = """
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
-            --bg-a: #edf4ff;
-            --bg-b: #fffaf2;
-            --surface: #ffffff;
-            --ink-strong: #1d2433;
-            --ink-mid: #5f6d84;
-            --line: #d7e3f2;
-            --http: #1479ff;
-            --https: #06b27a;
-            --accent: #f08c2b;
-            --danger: #d94848;
-            --ok: #1f9f72;
-            --shadow: 0 14px 32px rgba(39, 68, 119, 0.12);
+            --bg-a: #09162b;
+            --bg-b: #050b16;
+            --surface: #101b2d;
+            --surface-soft: #15243a;
+            --ink-strong: #e8efff;
+            --ink-mid: #9eb1cb;
+            --line: #233956;
+            --http: #4ca5ff;
+            --https: #38d7a3;
+            --accent: #ffb44d;
+            --danger: #ff7b72;
+            --ok: #4dd6a0;
+            --shadow: 0 18px 36px rgba(2, 8, 18, 0.45);
         }
 
         * { box-sizing: border-box; }
@@ -324,8 +423,8 @@ DASHBOARD_HTML = """
             min-height: 100vh;
             font-family: "Space Grotesk", "Trebuchet MS", sans-serif;
             color: var(--ink-strong);
-            background: radial-gradient(circle at 10% 15%, #cfe7ff 0%, transparent 42%),
-                        radial-gradient(circle at 90% 0%, #ffe9bf 0%, transparent 38%),
+            background: radial-gradient(circle at 14% 12%, rgba(32, 105, 186, 0.38) 0%, transparent 35%),
+                        radial-gradient(circle at 88% 4%, rgba(14, 178, 138, 0.18) 0%, transparent 30%),
                         linear-gradient(160deg, var(--bg-a) 0%, var(--bg-b) 100%);
             padding: 24px;
         }
@@ -382,7 +481,7 @@ DASHBOARD_HTML = """
             padding: 10px 12px;
             border-radius: 12px;
             border: 1px solid var(--line);
-            background: #f8fbff;
+            background: rgba(20, 36, 57, 0.9);
             font-size: 0.86rem;
             color: var(--ink-mid);
             overflow: hidden;
@@ -401,7 +500,7 @@ DASHBOARD_HTML = """
         .kpi {
             border: 1px solid var(--line);
             border-radius: 14px;
-            background: linear-gradient(180deg, #ffffff, #f8fbff);
+            background: linear-gradient(180deg, #13233a, #101c2f);
             padding: 16px;
             min-height: 102px;
         }
@@ -471,15 +570,15 @@ DASHBOARD_HTML = """
         }
 
         .badge-ok {
-            background: rgba(31, 159, 114, 0.12);
+            background: rgba(77, 214, 160, 0.16);
             color: var(--ok);
-            border: 1px solid rgba(31, 159, 114, 0.3);
+            border: 1px solid rgba(77, 214, 160, 0.38);
         }
 
         .badge-down {
-            background: rgba(217, 72, 72, 0.12);
+            background: rgba(255, 123, 114, 0.12);
             color: var(--danger);
-            border: 1px solid rgba(217, 72, 72, 0.3);
+            border: 1px solid rgba(255, 123, 114, 0.35);
         }
 
         .codeish {
@@ -489,11 +588,11 @@ DASHBOARD_HTML = """
         }
 
         .alert-box {
-            border: 1px dashed #f4c28f;
-            background: #fff7ed;
+            border: 1px dashed #3a5d86;
+            background: rgba(18, 31, 50, 0.95);
             border-radius: 12px;
             padding: 12px;
-            color: #7f4d21;
+            color: #c8daef;
             font-size: 0.89rem;
         }
 
@@ -614,11 +713,12 @@ DASHBOARD_HTML = """
 
     <script>
         const palette = {
-            http: '#1479ff',
-            https: '#06b27a',
-            accent: '#f08c2b',
-            ink: '#1d2433',
-            grid: '#d7e3f2'
+            http: '#4ca5ff',
+            https: '#38d7a3',
+            accent: '#ffb44d',
+            ink: '#e8efff',
+            muted: '#9eb1cb',
+            grid: 'rgba(65, 93, 128, 0.45)'
         };
 
         const latencyChart = new Chart(document.getElementById('latencyChart'), {
@@ -630,7 +730,7 @@ DASHBOARD_HTML = """
                         label: 'HTTP (ms)',
                         data: [],
                         borderColor: palette.http,
-                        backgroundColor: 'rgba(20, 121, 255, 0.14)',
+                        backgroundColor: 'rgba(76, 165, 255, 0.18)',
                         pointRadius: 2,
                         tension: 0.28,
                         spanGaps: true,
@@ -639,7 +739,7 @@ DASHBOARD_HTML = """
                         label: 'HTTPS (ms)',
                         data: [],
                         borderColor: palette.https,
-                        backgroundColor: 'rgba(6, 178, 122, 0.16)',
+                        backgroundColor: 'rgba(56, 215, 163, 0.18)',
                         pointRadius: 2,
                         tension: 0.28,
                         spanGaps: true,
@@ -651,8 +751,8 @@ DASHBOARD_HTML = """
                 maintainAspectRatio: false,
                 plugins: { legend: { labels: { color: palette.ink } } },
                 scales: {
-                    x: { ticks: { color: '#5f6d84', maxTicksLimit: 12 }, grid: { color: 'rgba(215,227,242,0.5)' } },
-                    y: { beginAtZero: true, ticks: { color: '#5f6d84' }, grid: { color: 'rgba(215,227,242,0.5)' } }
+                    x: { ticks: { color: palette.muted, maxTicksLimit: 12 }, grid: { color: palette.grid } },
+                    y: { beginAtZero: true, ticks: { color: palette.muted }, grid: { color: palette.grid } }
                 }
             }
         });
@@ -662,8 +762,8 @@ DASHBOARD_HTML = """
             data: {
                 labels: ['Average', 'P95', 'P99'],
                 datasets: [
-                    { label: 'HTTP', data: [0, 0, 0], backgroundColor: 'rgba(20, 121, 255, 0.7)' },
-                    { label: 'HTTPS', data: [0, 0, 0], backgroundColor: 'rgba(6, 178, 122, 0.7)' }
+                    { label: 'HTTP', data: [0, 0, 0], backgroundColor: 'rgba(76, 165, 255, 0.8)' },
+                    { label: 'HTTPS', data: [0, 0, 0], backgroundColor: 'rgba(56, 215, 163, 0.8)' }
                 ]
             },
             options: {
@@ -671,8 +771,8 @@ DASHBOARD_HTML = """
                 maintainAspectRatio: false,
                 plugins: { legend: { labels: { color: palette.ink } } },
                 scales: {
-                    x: { ticks: { color: '#5f6d84' }, grid: { color: 'rgba(215,227,242,0.5)' } },
-                    y: { beginAtZero: true, ticks: { color: '#5f6d84' }, grid: { color: 'rgba(215,227,242,0.5)' } }
+                    x: { ticks: { color: palette.muted }, grid: { color: palette.grid } },
+                    y: { beginAtZero: true, ticks: { color: palette.muted }, grid: { color: palette.grid } }
                 }
             }
         });
@@ -685,15 +785,15 @@ DASHBOARD_HTML = """
                         type: 'bar',
                         label: 'Uptime %',
                         data: [0, 0],
-                        backgroundColor: ['rgba(20, 121, 255, 0.75)', 'rgba(6, 178, 122, 0.75)'],
+                        backgroundColor: ['rgba(76, 165, 255, 0.82)', 'rgba(56, 215, 163, 0.82)'],
                         yAxisID: 'uptimeAxis',
                     },
                     {
                         type: 'line',
                         label: 'Failures',
                         data: [0, 0],
-                        borderColor: '#d94848',
-                        backgroundColor: '#d94848',
+                        borderColor: '#ff7b72',
+                        backgroundColor: '#ff7b72',
                         yAxisID: 'failureAxis',
                         tension: 0.1,
                     }
@@ -708,16 +808,16 @@ DASHBOARD_HTML = """
                         position: 'left',
                         min: 0,
                         max: 100,
-                        ticks: { color: '#5f6d84' },
-                        grid: { color: 'rgba(215,227,242,0.5)' }
+                        ticks: { color: palette.muted },
+                        grid: { color: palette.grid }
                     },
                     failureAxis: {
                         position: 'right',
                         beginAtZero: true,
-                        ticks: { color: '#5f6d84' },
+                        ticks: { color: palette.muted },
                         grid: { drawOnChartArea: false }
                     },
-                    x: { ticks: { color: '#5f6d84' }, grid: { color: 'rgba(215,227,242,0.5)' } }
+                    x: { ticks: { color: palette.muted }, grid: { color: palette.grid } }
                 }
             }
         });
@@ -731,13 +831,13 @@ DASHBOARD_HTML = """
                         label: 'HTTP score',
                         data: [0, 0, 0, 0, 0],
                         borderColor: palette.http,
-                        backgroundColor: 'rgba(20, 121, 255, 0.18)',
+                        backgroundColor: 'rgba(76, 165, 255, 0.22)',
                     },
                     {
                         label: 'HTTPS score',
                         data: [0, 0, 0, 0, 0],
                         borderColor: palette.https,
-                        backgroundColor: 'rgba(6, 178, 122, 0.18)',
+                        backgroundColor: 'rgba(56, 215, 163, 0.22)',
                     }
                 ]
             },
@@ -748,10 +848,10 @@ DASHBOARD_HTML = """
                     r: {
                         min: 0,
                         max: 100,
-                        ticks: { color: '#5f6d84', backdropColor: 'rgba(255,255,255,0.6)' },
-                        angleLines: { color: 'rgba(215,227,242,0.7)' },
-                        grid: { color: 'rgba(215,227,242,0.7)' },
-                        pointLabels: { color: '#5f6d84' },
+                        ticks: { color: palette.muted, backdropColor: 'rgba(16, 27, 45, 0.7)' },
+                        angleLines: { color: palette.grid },
+                        grid: { color: palette.grid },
+                        pointLabels: { color: palette.muted },
                     }
                 },
                 plugins: { legend: { labels: { color: palette.ink } } }
@@ -806,7 +906,9 @@ DASHBOARD_HTML = """
         function updateNote(data) {
             const note = document.getElementById('noteBox');
             if (!data.http.is_up || !data.https.is_up) {
-                note.textContent = 'One or more targets are currently down. Check server terminals, firewall rules, and endpoint URLs.';
+                const httpTried = (data.targets.http_candidates || []).join(', ');
+                const httpsTried = (data.targets.https_candidates || []).join(', ');
+                note.textContent = `One or more targets are down. HTTP tried: [${httpTried}] | HTTPS tried: [${httpsTried}]`;
                 return;
             }
             note.textContent = `Both targets are reachable. Current avg delta (HTTPS - HTTP): ${toFixedSafe(data.comparison.avg_delta_ms, 2)} ms.`;
@@ -900,6 +1002,8 @@ if __name__ == "__main__":
 
     print(f"Dashboard listening on http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
     print(f"Monitoring targets: HTTP={HTTP_TARGET} HTTPS={HTTPS_TARGET}")
+    print(f"HTTP candidates: {', '.join(HTTP_CANDIDATES)}")
+    print(f"HTTPS candidates: {', '.join(HTTPS_CANDIDATES)}")
     print(f"Poll interval: {POLL_INTERVAL_SEC}s | Timeout: {REQUEST_TIMEOUT_SEC}s")
 
     app.run(host=DASHBOARD_HOST, port=DASHBOARD_PORT, debug=False)
