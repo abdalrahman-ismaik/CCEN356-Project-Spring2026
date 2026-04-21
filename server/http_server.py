@@ -8,16 +8,32 @@ Note: On Windows, run as Administrator to bind to port 80.
 """
 
 from flask import Flask, render_template, request
+import atexit
 import logging
+from logging.handlers import QueueHandler, QueueListener
 import os
+from queue import SimpleQueue
 
-# Logging
-logging.basicConfig(
-    filename='http_server.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('http_server')
+
+def _configure_async_logger(log_filename, logger_name):
+    """Write logs through a queue so request threads are not blocked by disk I/O."""
+    log_queue = SimpleQueue()
+    file_handler = logging.FileHandler(log_filename)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+    listener = QueueListener(log_queue, file_handler)
+    listener.start()
+    atexit.register(listener.stop)
+
+    configured_logger = logging.getLogger(logger_name)
+    configured_logger.setLevel(logging.INFO)
+    configured_logger.handlers.clear()
+    configured_logger.addHandler(QueueHandler(log_queue))
+    configured_logger.propagate = False
+    return configured_logger
+
+
+logger = _configure_async_logger('http_server.log', 'http_server')
 
 app = Flask(
     __name__,
@@ -43,4 +59,4 @@ def show():
 
 if __name__ == '__main__':
     print("HTTP server starting on http://0.0.0.0:80")
-    app.run(host='0.0.0.0', port=80, debug=False)
+    app.run(host='0.0.0.0', port=80, debug=False, threaded=True, use_reloader=False)

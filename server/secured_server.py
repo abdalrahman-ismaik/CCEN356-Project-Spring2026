@@ -11,16 +11,32 @@ Run on Server PC (Windows, 192.165.20.79):
 """
 
 from flask import Flask, render_template, request, abort
+import atexit
 import logging
+from logging.handlers import QueueHandler, QueueListener
 import os
+from queue import SimpleQueue
 
-# Logging
-logging.basicConfig(
-    filename='server.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('secured_server')
+
+def _configure_async_logger(log_filename, logger_name):
+    """Write logs through a queue so request threads are not blocked by disk I/O."""
+    log_queue = SimpleQueue()
+    file_handler = logging.FileHandler(log_filename)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+    listener = QueueListener(log_queue, file_handler)
+    listener.start()
+    atexit.register(listener.stop)
+
+    configured_logger = logging.getLogger(logger_name)
+    configured_logger.setLevel(logging.INFO)
+    configured_logger.handlers.clear()
+    configured_logger.addHandler(QueueHandler(log_queue))
+    configured_logger.propagate = False
+    return configured_logger
+
+
+logger = _configure_async_logger('server.log', 'secured_server')
 
 app = Flask(
     __name__,
@@ -84,4 +100,11 @@ if __name__ == '__main__':
         exit(1)
 
     print("HTTPS server starting on https://0.0.0.0:443")
-    app.run(host='0.0.0.0', port=443, ssl_context=(cert_path, key_path))
+    app.run(
+        host='0.0.0.0',
+        port=443,
+        ssl_context=(cert_path, key_path),
+        debug=False,
+        threaded=True,
+        use_reloader=False,
+    )
