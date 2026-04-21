@@ -586,6 +586,12 @@ python scripts/dashboard.py
 
 Then open: **http://localhost:5000** on that same client.
 
+**Real-time defaults (current):**
+
+- Poll interval: **1.0s**
+- Request timeout: **1.5s**
+- HTTP/HTTPS probes run concurrently each cycle
+
 **Expected (advanced dashboard):**
 
 - KPI cards for HTTP avg, HTTPS avg, latency delta, and fastest protocol
@@ -594,6 +600,7 @@ Then open: **http://localhost:5000** on that same client.
 - Reliability chart (uptime + failures)
 - Performance profile radar (latency, tail, jitter, availability, consistency)
 - Endpoint status matrix with last status code, last latency, checks/failures, and last error
+- If internet/CDN access is blocked, charts still render using the built-in offline canvas renderer (no external Chart.js dependency required)
 
 - If both monitored targets are reachable, status badges show **UP**.
 - If a target is unreachable, it shows **DOWN** plus last error details in the status matrix.
@@ -635,11 +642,21 @@ curl http://localhost:5000/api/metrics
 
 If Step 17 shows **DOWN** after Steps 14/15, verify Step 10 servers are still running on the Server PC.
 
+If the dashboard is slow or appears stale, make sure only one instance is bound to port 5000 (close older dashboard terminals before launching a new one).
+
 Optional target override from the Client PC (PowerShell):
 ```powershell
 $env:CCEN356_HTTP_URL="http://192.165.20.79"
 $env:CCEN356_HTTPS_URL="https://192.165.20.79"
 $env:CCEN356_DASHBOARD_PORT="5000"
+python scripts/dashboard.py
+```
+
+Optional real-time tuning (PowerShell):
+```powershell
+$env:CCEN356_POLL_INTERVAL_SEC="0.8"
+$env:CCEN356_REQUEST_TIMEOUT_SEC="1.2"
+$env:CCEN356_DASHBOARD_MAX_SAMPLES="360"
 python scripts/dashboard.py
 ```
 

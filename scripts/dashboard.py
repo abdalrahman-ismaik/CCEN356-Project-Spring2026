@@ -10,6 +10,7 @@ Examples:
 """
 
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import math
 import os
@@ -32,8 +33,8 @@ HTTPS_TARGET = os.getenv("CCEN356_HTTPS_URL", f"https://{DEFAULT_SERVER_HOST}")
 
 DASHBOARD_HOST = os.getenv("CCEN356_DASHBOARD_HOST", "0.0.0.0")
 DASHBOARD_PORT = int(os.getenv("CCEN356_DASHBOARD_PORT", "5000"))
-POLL_INTERVAL_SEC = float(os.getenv("CCEN356_POLL_INTERVAL_SEC", "3"))
-REQUEST_TIMEOUT_SEC = float(os.getenv("CCEN356_REQUEST_TIMEOUT_SEC", "6"))
+POLL_INTERVAL_SEC = float(os.getenv("CCEN356_POLL_INTERVAL_SEC", "1"))
+REQUEST_TIMEOUT_SEC = float(os.getenv("CCEN356_REQUEST_TIMEOUT_SEC", "1.5"))
 MAX_SAMPLES = int(os.getenv("CCEN356_DASHBOARD_MAX_SAMPLES", "240"))
 
 
@@ -84,8 +85,8 @@ HTTP_FALLBACK_PORTS = _safe_parse_ports(
     defaults=[80],
 )
 HTTPS_FALLBACK_PORTS = _safe_parse_ports(
-    os.getenv("CCEN356_HTTPS_FALLBACK_PORTS", "443,433"),
-    defaults=[443, 433],
+    os.getenv("CCEN356_HTTPS_FALLBACK_PORTS", "443,8443"),
+    defaults=[443, 8443],
 )
 
 HTTP_CANDIDATES = _build_candidates(HTTP_TARGET, "http", HTTP_FALLBACK_PORTS)
@@ -111,6 +112,7 @@ def _new_endpoint_state(target_url, candidates, verify_tls):
 
 
 METRICS_LOCK = threading.Lock()
+PROBE_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 DASHBOARD_STATE = {
     "started_at": time.time(),
     "timeline": {
@@ -250,10 +252,11 @@ def background_collector():
     """Continuously probe HTTP/HTTPS targets and update shared dashboard state."""
     while True:
         timestamp_label = datetime.now().strftime("%H:%M:%S")
-        cycle = {}
-        for key in ("http", "https"):
-            endpoint_state = DASHBOARD_STATE["endpoints"][key]
-            cycle[key] = _probe_endpoint(endpoint_state)
+        future_map = {
+            key: PROBE_EXECUTOR.submit(_probe_endpoint, DASHBOARD_STATE["endpoints"][key])
+            for key in ("http", "https")
+        }
+        cycle = {key: future_map[key].result() for key in ("http", "https")}
 
         with METRICS_LOCK:
             DASHBOARD_STATE["timeline"]["labels"].append(timestamp_label)
@@ -722,18 +725,16 @@ DASHBOARD_HTML = """
         };
 
         const chartLibraryAvailable = typeof Chart !== 'undefined';
+        const fallbackCanvases = {
+            latency: document.getElementById('latencyChart'),
+            percentile: document.getElementById('percentileChart'),
+            reliability: document.getElementById('reliabilityChart'),
+            score: document.getElementById('scoreChart'),
+        };
 
         if (!chartLibraryAvailable) {
-            document.querySelectorAll('.chart-wrap').forEach((panel) => {
-                const canvas = panel.querySelector('canvas');
-                if (canvas) {
-                    canvas.style.display = 'none';
-                }
-                const hint = document.createElement('p');
-                hint.className = 'codeish';
-                hint.textContent = 'Chart.js unavailable (offline/CDN blocked). Metrics table and KPI cards remain live.';
-                panel.appendChild(hint);
-            });
+            const note = document.getElementById('noteBox');
+            note.textContent = 'Chart.js unavailable from CDN. Using built-in offline canvas renderer with live updates.';
         }
 
         const latencyChart = chartLibraryAvailable ? new Chart(document.getElementById('latencyChart'), {
@@ -873,6 +874,219 @@ DASHBOARD_HTML = """
             }
         }) : null;
 
+        function setupCanvas(canvas) {
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            const width = Math.max(280, rect.width || 280);
+            const height = Math.max(220, rect.height || 260);
+            canvas.width = Math.floor(width * dpr);
+            canvas.height = Math.floor(height * dpr);
+            const ctx = canvas.getContext('2d');
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = '#0f1b2f';
+            ctx.fillRect(0, 0, width, height);
+            return { ctx, width, height };
+        }
+
+        function drawPlotArea(ctx, width, height, maxY, yTicks = 4) {
+            const plot = {
+                left: 42,
+                right: width - 12,
+                top: 16,
+                bottom: height - 26,
+            };
+            const plotW = Math.max(1, plot.right - plot.left);
+            const plotH = Math.max(1, plot.bottom - plot.top);
+
+            ctx.strokeStyle = palette.grid;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let i = 0; i <= yTicks; i++) {
+                const y = plot.bottom - (plotH * (i / yTicks));
+                ctx.moveTo(plot.left, y);
+                ctx.lineTo(plot.right, y);
+            }
+            ctx.stroke();
+
+            ctx.fillStyle = palette.muted;
+            ctx.font = '11px "Source Code Pro", Consolas, monospace';
+            for (let i = 0; i <= yTicks; i++) {
+                const y = plot.bottom - (plotH * (i / yTicks));
+                const value = ((maxY * i) / yTicks).toFixed(0);
+                ctx.fillText(value, 6, y + 3);
+            }
+
+            return { plot, plotW, plotH };
+        }
+
+        function toY(value, maxY, plot) {
+            const normalized = maxY > 0 ? (value / maxY) : 0;
+            return plot.bottom - (Math.max(0, Math.min(1, normalized)) * (plot.bottom - plot.top));
+        }
+
+        function drawSeries(ctx, values, color, maxY, plot) {
+            let started = false;
+            const stepX = values.length > 1 ? (plot.right - plot.left) / (values.length - 1) : 0;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            values.forEach((raw, idx) => {
+                if (raw === null || raw === undefined || Number.isNaN(raw)) {
+                    started = false;
+                    return;
+                }
+                const x = plot.left + stepX * idx;
+                const y = toY(raw, maxY, plot);
+                if (!started) {
+                    ctx.moveTo(x, y);
+                    started = true;
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            });
+            ctx.stroke();
+        }
+
+        function renderLatencyFallback(data) {
+            const canvas = fallbackCanvases.latency;
+            const { ctx, width, height } = setupCanvas(canvas);
+            const values = [...(data.timeline.http_ms || []), ...(data.timeline.https_ms || [])].filter(v => Number.isFinite(v));
+            const maxY = Math.max(10, ...values, 0) * 1.2;
+            const { plot } = drawPlotArea(ctx, width, height, maxY, 5);
+            drawSeries(ctx, data.timeline.http_ms || [], palette.http, maxY, plot);
+            drawSeries(ctx, data.timeline.https_ms || [], palette.https, maxY, plot);
+        }
+
+        function renderPercentileFallback(data) {
+            const canvas = fallbackCanvases.percentile;
+            const { ctx, width, height } = setupCanvas(canvas);
+            const httpVals = [data.http.avg_ms, data.http.p95_ms, data.http.p99_ms].map(v => Number(v) || 0);
+            const httpsVals = [data.https.avg_ms, data.https.p95_ms, data.https.p99_ms].map(v => Number(v) || 0);
+            const maxY = Math.max(10, ...httpVals, ...httpsVals) * 1.2;
+            const { plot, plotW, plotH } = drawPlotArea(ctx, width, height, maxY, 5);
+
+            const categories = 3;
+            const groupW = plotW / categories;
+            const barW = Math.max(8, Math.min(20, (groupW - 14) / 2));
+            const labels = ['AVG', 'P95', 'P99'];
+            for (let i = 0; i < categories; i++) {
+                const gx = plot.left + i * groupW + (groupW / 2);
+                const h1 = (httpVals[i] / maxY) * plotH;
+                const h2 = (httpsVals[i] / maxY) * plotH;
+                ctx.fillStyle = 'rgba(76,165,255,0.82)';
+                ctx.fillRect(gx - barW - 2, plot.bottom - h1, barW, h1);
+                ctx.fillStyle = 'rgba(56,215,163,0.82)';
+                ctx.fillRect(gx + 2, plot.bottom - h2, barW, h2);
+                ctx.fillStyle = palette.muted;
+                ctx.font = '11px "Source Code Pro", Consolas, monospace';
+                ctx.fillText(labels[i], gx - 12, plot.bottom + 14);
+            }
+        }
+
+        function renderReliabilityFallback(data) {
+            const canvas = fallbackCanvases.reliability;
+            const { ctx, width, height } = setupCanvas(canvas);
+            const uptimes = [Number(data.http.uptime_pct) || 0, Number(data.https.uptime_pct) || 0];
+            const failures = [Number(data.http.failures) || 0, Number(data.https.failures) || 0];
+            const maxFailures = Math.max(1, ...failures);
+            const { plot, plotW, plotH } = drawPlotArea(ctx, width, height, 100, 5);
+
+            const x1 = plot.left + plotW * 0.25;
+            const x2 = plot.left + plotW * 0.75;
+            const barW = Math.max(20, Math.min(44, plotW * 0.14));
+
+            [x1, x2].forEach((x, i) => {
+                const h = (uptimes[i] / 100) * plotH;
+                ctx.fillStyle = i === 0 ? 'rgba(76,165,255,0.82)' : 'rgba(56,215,163,0.82)';
+                ctx.fillRect(x - (barW / 2), plot.bottom - h, barW, h);
+                ctx.fillStyle = palette.muted;
+                ctx.font = '11px "Source Code Pro", Consolas, monospace';
+                ctx.fillText(i === 0 ? 'HTTP' : 'HTTPS', x - 18, plot.bottom + 14);
+            });
+
+            ctx.strokeStyle = '#ff7b72';
+            ctx.fillStyle = '#ff7b72';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            const y1 = plot.bottom - ((failures[0] / maxFailures) * plotH);
+            const y2 = plot.bottom - ((failures[1] / maxFailures) * plotH);
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(x1, y1, 3, 0, Math.PI * 2);
+            ctx.arc(x2, y2, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = palette.muted;
+            ctx.font = '11px "Source Code Pro", Consolas, monospace';
+            ctx.fillText(`Failures axis max: ${maxFailures}`, plot.left + 4, plot.top + 12);
+        }
+
+        function renderScoreFallback(data) {
+            const canvas = fallbackCanvases.score;
+            const { ctx, width, height } = setupCanvas(canvas);
+            const centerX = width / 2;
+            const centerY = height / 2;
+            const radius = Math.min(width, height) * 0.33;
+            const labels = ['Latency', 'Tail', 'Jitter', 'Availability', 'Consistency'];
+            const http = data.http.profile_scores || {};
+            const https = data.https.profile_scores || {};
+            const httpVals = [http.latency, http.tail, http.jitter, http.availability, http.consistency].map(v => Number(v) || 0);
+            const httpsVals = [https.latency, https.tail, https.jitter, https.availability, https.consistency].map(v => Number(v) || 0);
+
+            for (let ring = 1; ring <= 5; ring++) {
+                const r = (radius * ring) / 5;
+                ctx.strokeStyle = palette.grid;
+                ctx.beginPath();
+                for (let i = 0; i < labels.length; i++) {
+                    const angle = (-Math.PI / 2) + ((Math.PI * 2 * i) / labels.length);
+                    const x = centerX + Math.cos(angle) * r;
+                    const y = centerY + Math.sin(angle) * r;
+                    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                }
+                ctx.closePath();
+                ctx.stroke();
+            }
+
+            labels.forEach((label, i) => {
+                const angle = (-Math.PI / 2) + ((Math.PI * 2 * i) / labels.length);
+                const x = centerX + Math.cos(angle) * (radius + 18);
+                const y = centerY + Math.sin(angle) * (radius + 18);
+                ctx.fillStyle = palette.muted;
+                ctx.font = '11px "Source Code Pro", Consolas, monospace';
+                ctx.fillText(label, x - 22, y + 3);
+            });
+
+            function drawRadar(values, stroke, fill) {
+                ctx.strokeStyle = stroke;
+                ctx.fillStyle = fill;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                values.forEach((v, i) => {
+                    const angle = (-Math.PI / 2) + ((Math.PI * 2 * i) / labels.length);
+                    const r = radius * (Math.max(0, Math.min(100, v)) / 100);
+                    const x = centerX + Math.cos(angle) * r;
+                    const y = centerY + Math.sin(angle) * r;
+                    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                });
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+            }
+
+            drawRadar(httpVals, palette.http, 'rgba(76,165,255,0.22)');
+            drawRadar(httpsVals, palette.https, 'rgba(56,215,163,0.22)');
+        }
+
+        function renderFallbackCharts(data) {
+            renderLatencyFallback(data);
+            renderPercentileFallback(data);
+            renderReliabilityFallback(data);
+            renderScoreFallback(data);
+        }
+
         const toFixedSafe = (value, digits = 1) => Number.isFinite(value) ? value.toFixed(digits) : '0.0';
 
         function formatDuration(seconds) {
@@ -930,11 +1144,13 @@ DASHBOARD_HTML = """
         }
 
         function updateDashboard(data) {
+            window.__lastPayload = data;
             document.getElementById('clock').textContent = `Last refresh: ${data.generated_at}`;
             document.getElementById('httpTarget').textContent = data.targets.http;
             document.getElementById('httpsTarget').textContent = data.targets.https;
             document.getElementById('pollRate').textContent = `${toFixedSafe(data.dashboard.poll_interval_sec, 1)}s`;
             document.getElementById('dashUptime').textContent = formatDuration(data.dashboard.uptime_sec);
+            refreshMs = Math.max(400, Math.round((data.dashboard.poll_interval_sec || 1) * 1000));
 
             document.getElementById('httpAvg').textContent = `${toFixedSafe(data.http.avg_ms, 1)} ms`;
             document.getElementById('httpsAvg').textContent = `${toFixedSafe(data.https.avg_ms, 1)} ms`;
@@ -980,6 +1196,10 @@ DASHBOARD_HTML = """
                 scoreChart.update();
             }
 
+            if (!chartLibraryAvailable) {
+                renderFallbackCharts(data);
+            }
+
             fillStatusTable(data);
             updateNote(data);
         }
@@ -994,8 +1214,20 @@ DASHBOARD_HTML = """
             }
         }
 
-        fetchMetrics();
-        setInterval(fetchMetrics, 3000);
+        let refreshMs = 1000;
+
+        async function runLoop() {
+            await fetchMetrics();
+            window.setTimeout(runLoop, refreshMs);
+        }
+
+        runLoop();
+
+        window.addEventListener('resize', () => {
+            if (!chartLibraryAvailable && window.__lastPayload) {
+                renderFallbackCharts(window.__lastPayload);
+            }
+        });
     </script>
 </body>
 </html>
