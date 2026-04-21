@@ -73,6 +73,11 @@ def _build_candidates(primary_url, scheme, candidate_ports):
     if seed_url not in candidates:
         candidates.append(seed_url)
 
+    # If the dashboard runs on the same server as the monitored endpoints, loopback
+    # addresses are often the most reliable way to reach the local Flask servers.
+    add_candidate("127.0.0.1", port=None)
+    add_candidate("localhost", port=None)
+
     add_candidate(host, port=None)
     for port in candidate_ports:
         add_candidate(host, port=port)
@@ -85,7 +90,7 @@ HTTP_FALLBACK_PORTS = _safe_parse_ports(
     defaults=[80],
 )
 HTTPS_FALLBACK_PORTS = _safe_parse_ports(
-    os.getenv("CCEN356_HTTPS_FALLBACK_PORTS", "443,8443"),
+    os.getenv("CCEN356_HTTPS_FALLBACK_PORTS", "443"),
     defaults=[443, 8443],
 )
 
@@ -532,7 +537,22 @@ DASHBOARD_HTML = """
         }
 
         .chart-wrap {
-            min-height: 280px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-height: 320px;
+            height: 320px;
+            overflow: hidden;
+        }
+
+        .chart-wrap canvas {
+            display: block;
+            width: 100% !important;
+            height: 100% !important;
+            max-width: 100%;
+            max-height: 100%;
+            min-height: 0;
+            flex: 1 1 auto;
         }
 
         .chart-title {
@@ -626,6 +646,10 @@ DASHBOARD_HTML = """
             .grid,
             .status-strip {
                 grid-template-columns: 1fr;
+            }
+            .chart-wrap {
+                height: 300px;
+                min-height: 300px;
             }
             .timestamp { text-align: left; }
             .panel { padding: 14px; }
