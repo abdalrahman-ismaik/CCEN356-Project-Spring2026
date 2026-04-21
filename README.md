@@ -551,7 +551,12 @@ python scripts/dashboard.py
 
 Then open a browser and go to: **http://localhost:5000**
 
-**Expected:** A dark-themed web page with a real-time Chart.js line chart that updates every 3 seconds showing HTTP and HTTPS response times. The `/api/metrics` endpoint also returns JSON:
+**Expected:** A dark-themed web page with a real-time Chart.js line chart that updates every 3 seconds showing HTTP and HTTPS response times.
+
+- If both server endpoints are reachable, the status bar shows **HTTP OK | HTTPS OK**.
+- If an endpoint is unreachable, the status bar shows **HTTP DOWN** and/or **HTTPS DOWN** with the last connection error.
+
+The `/api/metrics` endpoint returns JSON like:
 
 ```powershell
 curl http://localhost:5000/api/metrics
@@ -560,9 +565,30 @@ curl http://localhost:5000/api/metrics
 {
   "http_avg_ms": 12.4,
   "https_avg_ms": 31.7,
-  "http_samples": [...],
-  "https_samples": [...]
+  "http_samples": [11.9, 12.1, 12.4],
+  "https_samples": [29.8, 31.2, 31.7],
+  "http_status": {
+    "ok": true,
+    "last_error": "",
+    "last_status_code": 200
+  },
+  "https_status": {
+    "ok": true,
+    "last_error": "",
+    "last_status_code": 200
+  },
+  "http_target": "http://192.165.20.79",
+  "https_target": "https://192.165.20.79"
 }
+```
+
+If Step 17 shows **DOWN** after Steps 14/15, verify Step 10 servers are still running on the Server PC.
+
+Optional target override from the Client PC (PowerShell):
+```powershell
+$env:CCEN356_HTTP_URL="http://192.165.20.79"
+$env:CCEN356_HTTPS_URL="https://192.165.20.79"
+python scripts/dashboard.py
 ```
 
 ---
