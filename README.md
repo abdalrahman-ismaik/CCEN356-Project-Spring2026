@@ -508,6 +508,7 @@ On Client 2, immediately after starting the capture on Client 1:
 python scripts/performance_metrics.py
 ```
 
+
 This sends 20 HTTP and 20 HTTPS requests to the server and measures timing.
 
 **Expected output (example values):**
