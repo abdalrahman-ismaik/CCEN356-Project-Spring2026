@@ -6,7 +6,7 @@
 
 ## Project Goal
 
-Build a lab environment that **compares HTTP vs HTTPS performance** using physical Cisco networking equipment, Python automation scripts, Wireshark packet analysis, and data visualization. Deliverables: working lab setup, 5 Python scripts, Wireshark captures, matplotlib charts, and a formal report.
+Build a lab environment that **compares HTTP vs HTTPS performance** using physical Cisco networking equipment, Python automation scripts, Scapy packet capture, and data visualization. Deliverables: working lab setup, 5 Python scripts, Scapy capture logs, matplotlib charts, and a formal report.
 
 ---
 
@@ -68,7 +68,7 @@ CCEN356-Project-Spring2026/
 │   └── dashboard.py              # Script 5: Flask live dashboard
 ├── server/
 │   ├── http_server.py            # Flask HTTP server (port 80)
-│   ├── secured_server.py         # Flask HTTPS server (port 8443)
+│   ├── secured_server.py         # Flask HTTPS server (port 443)
 │   ├── templates/
 │   │   ├── index.html            # Home page
 │   │   └── show.html             # Secondary page
@@ -194,7 +194,7 @@ Install: `pip install -r requirements.txt`
 
 ## Server Specifications
 
-### `server/secured_server.py` — Flask HTTPS Server (port 8443)
+### `server/secured_server.py` — Flask HTTPS Server (port 443)
 
 - SSL context using `cert.pem` and `key.pem`
 - Security headers: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, HSTS, CSP
@@ -219,10 +219,10 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 ^
 
 ### Windows Firewall
 
-Open ports 80, 443, and 8443 (run as Administrator in PowerShell):
+Open ports 80 and 443 (run as Administrator in PowerShell):
 ```powershell
 New-NetFirewallRule -DisplayName "CCEN356 HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
-New-NetFirewallRule -DisplayName "CCEN356 HTTPS" -Direction Inbound -LocalPort 443,8443 -Protocol TCP -Action Allow
+New-NetFirewallRule -DisplayName "CCEN356 HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow
 ```
 
 ---
@@ -332,7 +332,7 @@ monitor session 1 destination interface GigabitEthernet0/10
 4. Set up Server PC (Windows): open firewall ports, start Flask HTTP + HTTPS servers
 5. Verify: `ping 192.165.20.79` from client PCs
 6. Verify: `curl http://192.165.20.79` and `curl -k https://192.165.20.79` (or `Invoke-WebRequest` on Windows)
-7. Start Wireshark on Monitor PC
+7. Start Scapy capture on Monitor PC
 8. Run `sudo python3 scripts/capture_traffic.py` on Client 1
 9. Run `python3 scripts/performance_metrics.py` on Client 2
 10. Wait for capture to complete (60s)
@@ -340,22 +340,16 @@ monitor session 1 destination interface GigabitEthernet0/10
 12. Run `python3 scripts/ssh_connect.py` — collects router show outputs
 13. Run `python3 scripts/dashboard.py` — screenshot at `http://localhost:5000`
 14. Export `show running-config` from R1 and R2 to `configs/`
-15. Save Wireshark `.pcapng` and take screenshots
+15. Save the Scapy CSV log and take screenshots
 
 ---
 
-## Wireshark Analysis Procedure
+## Scapy Analysis Procedure
 
-1. Start Wireshark on Monitor PC (SPAN port Gi0/10)
-2. Filters: `tcp.port == 80 || tcp.port == 443`
-3. Capture during script execution (60+ seconds)
-4. Screenshots needed:
-   - TCP 3-way handshake (SYN, SYN-ACK, ACK) for HTTP
-   - TLS handshake (ClientHello, ServerHello, Certificate) for HTTPS
-   - Data transfer frames
-   - Statistics → IO Graph
-   - Statistics → TCP Stream Graphs → Round Trip Time
-5. Save as `.pcapng` for report appendix
+1. Run `python scripts/capture_traffic.py` on the client that will monitor traffic.
+2. Capture during script execution (60+ seconds).
+3. Review `data/traffic_log.csv` for HTTP and HTTPS packet entries.
+4. Save the CSV plus the generated charts for the report appendix.
 
 ---
 
@@ -365,9 +359,9 @@ monitor session 1 destination interface GigabitEthernet0/10
 |---|---|
 | **Ch 1 — Overview** | HTTP vs HTTPS background, TLS/SSL concepts, project objectives, why QoS and ACLs matter |
 | **Ch 2 — Implementation** | Topology diagram, IP addressing table, router/switch config summaries, script purpose and logic (**no code in body**) |
-| **Ch 3 — Evaluation** | Wireshark screenshots with analysis, matplotlib charts, CSV data tables, QoS impact analysis |
+| **Ch 3 — Evaluation** | Scapy capture logs with analysis, matplotlib charts, CSV data tables, QoS impact analysis |
 | **Ch 4 — Discussion** | HTTP vs HTTPS overhead findings, QoS effect, team contributions, broader impact |
-| **Appendix** | Full `show running-config` from both routers, all Python source code, raw Wireshark screenshots |
+| **Appendix** | Full `show running-config` from both routers, all Python source code, raw Scapy capture logs |
 
 **Formatting:** Times New Roman 12pt. Source code **only in Appendix**.
 
@@ -386,14 +380,14 @@ monitor session 1 destination interface GigabitEthernet0/10
 - [ ] `python3 scripts/dashboard.py` → live dashboard at `:5000`
 - [ ] `show access-lists` shows hit counts
 - [ ] `show policy-map interface Gi0/1` shows QoS counters
-- [ ] Wireshark `.pcapng` saved with IO/RTT screenshots
+- [ ] `data/traffic_log.csv` saved with packet entries and analysis screenshots
 
 ---
 
 ## Key Decisions
 
 - **Physical hardware** (not Packet Tracer) — Cisco 2901 routers, 2960 switch
-- **Windows PC** as server (192.165.20.79) — Flask serves HTTP (:80) and HTTPS (:8443) directly, no Apache
+- **Windows PC** as server (192.165.20.79) — Flask serves HTTP (:80) and HTTPS (:443) directly, no Apache
 - **Self-signed SSL** certs — `verify=False` in Python scripts is acceptable
 - **Scapy requires root/sudo** to capture packets (on Linux clients)
 - **All Python scripts** run on client PCs (Linux)

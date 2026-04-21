@@ -84,8 +84,8 @@ HTTP_FALLBACK_PORTS = _safe_parse_ports(
     defaults=[80],
 )
 HTTPS_FALLBACK_PORTS = _safe_parse_ports(
-    os.getenv("CCEN356_HTTPS_FALLBACK_PORTS", "443,8443"),
-    defaults=[443, 8443],
+    os.getenv("CCEN356_HTTPS_FALLBACK_PORTS", "443,433"),
+    defaults=[443, 433],
 )
 
 HTTP_CANDIDATES = _build_candidates(HTTP_TARGET, "http", HTTP_FALLBACK_PORTS)
@@ -721,7 +721,22 @@ DASHBOARD_HTML = """
             grid: 'rgba(65, 93, 128, 0.45)'
         };
 
-        const latencyChart = new Chart(document.getElementById('latencyChart'), {
+        const chartLibraryAvailable = typeof Chart !== 'undefined';
+
+        if (!chartLibraryAvailable) {
+            document.querySelectorAll('.chart-wrap').forEach((panel) => {
+                const canvas = panel.querySelector('canvas');
+                if (canvas) {
+                    canvas.style.display = 'none';
+                }
+                const hint = document.createElement('p');
+                hint.className = 'codeish';
+                hint.textContent = 'Chart.js unavailable (offline/CDN blocked). Metrics table and KPI cards remain live.';
+                panel.appendChild(hint);
+            });
+        }
+
+        const latencyChart = chartLibraryAvailable ? new Chart(document.getElementById('latencyChart'), {
             type: 'line',
             data: {
                 labels: [],
@@ -755,9 +770,9 @@ DASHBOARD_HTML = """
                     y: { beginAtZero: true, ticks: { color: palette.muted }, grid: { color: palette.grid } }
                 }
             }
-        });
+        }) : null;
 
-        const percentileChart = new Chart(document.getElementById('percentileChart'), {
+        const percentileChart = chartLibraryAvailable ? new Chart(document.getElementById('percentileChart'), {
             type: 'bar',
             data: {
                 labels: ['Average', 'P95', 'P99'],
@@ -775,9 +790,9 @@ DASHBOARD_HTML = """
                     y: { beginAtZero: true, ticks: { color: palette.muted }, grid: { color: palette.grid } }
                 }
             }
-        });
+        }) : null;
 
-        const reliabilityChart = new Chart(document.getElementById('reliabilityChart'), {
+        const reliabilityChart = chartLibraryAvailable ? new Chart(document.getElementById('reliabilityChart'), {
             data: {
                 labels: ['HTTP', 'HTTPS'],
                 datasets: [
@@ -820,9 +835,9 @@ DASHBOARD_HTML = """
                     x: { ticks: { color: palette.muted }, grid: { color: palette.grid } }
                 }
             }
-        });
+        }) : null;
 
-        const scoreChart = new Chart(document.getElementById('scoreChart'), {
+        const scoreChart = chartLibraryAvailable ? new Chart(document.getElementById('scoreChart'), {
             type: 'radar',
             data: {
                 labels: ['Latency', 'Tail', 'Jitter', 'Availability', 'Consistency'],
@@ -856,7 +871,7 @@ DASHBOARD_HTML = """
                 },
                 plugins: { legend: { labels: { color: palette.ink } } }
             }
-        });
+        }) : null;
 
         const toFixedSafe = (value, digits = 1) => Number.isFinite(value) ? value.toFixed(digits) : '0.0';
 
@@ -926,36 +941,44 @@ DASHBOARD_HTML = """
             document.getElementById('deltaAvg').textContent = `${toFixedSafe(data.comparison.avg_delta_ms, 1)} ms`;
             document.getElementById('fastestProtocol').textContent = data.comparison.faster_protocol;
 
-            latencyChart.data.labels = data.timeline.labels;
-            latencyChart.data.datasets[0].data = data.timeline.http_ms;
-            latencyChart.data.datasets[1].data = data.timeline.https_ms;
-            latencyChart.update();
+            if (latencyChart) {
+                latencyChart.data.labels = data.timeline.labels;
+                latencyChart.data.datasets[0].data = data.timeline.http_ms;
+                latencyChart.data.datasets[1].data = data.timeline.https_ms;
+                latencyChart.update();
+            }
 
-            percentileChart.data.datasets[0].data = [data.http.avg_ms, data.http.p95_ms, data.http.p99_ms];
-            percentileChart.data.datasets[1].data = [data.https.avg_ms, data.https.p95_ms, data.https.p99_ms];
-            percentileChart.update();
+            if (percentileChart) {
+                percentileChart.data.datasets[0].data = [data.http.avg_ms, data.http.p95_ms, data.http.p99_ms];
+                percentileChart.data.datasets[1].data = [data.https.avg_ms, data.https.p95_ms, data.https.p99_ms];
+                percentileChart.update();
+            }
 
-            reliabilityChart.data.datasets[0].data = [data.http.uptime_pct, data.https.uptime_pct];
-            reliabilityChart.data.datasets[1].data = [data.http.failures, data.https.failures];
-            reliabilityChart.update();
+            if (reliabilityChart) {
+                reliabilityChart.data.datasets[0].data = [data.http.uptime_pct, data.https.uptime_pct];
+                reliabilityChart.data.datasets[1].data = [data.http.failures, data.https.failures];
+                reliabilityChart.update();
+            }
 
-            const httpScore = data.http.profile_scores;
-            const httpsScore = data.https.profile_scores;
-            scoreChart.data.datasets[0].data = [
-                httpScore.latency,
-                httpScore.tail,
-                httpScore.jitter,
-                httpScore.availability,
-                httpScore.consistency,
-            ];
-            scoreChart.data.datasets[1].data = [
-                httpsScore.latency,
-                httpsScore.tail,
-                httpsScore.jitter,
-                httpsScore.availability,
-                httpsScore.consistency,
-            ];
-            scoreChart.update();
+            if (scoreChart) {
+                const httpScore = data.http.profile_scores;
+                const httpsScore = data.https.profile_scores;
+                scoreChart.data.datasets[0].data = [
+                    httpScore.latency,
+                    httpScore.tail,
+                    httpScore.jitter,
+                    httpScore.availability,
+                    httpScore.consistency,
+                ];
+                scoreChart.data.datasets[1].data = [
+                    httpsScore.latency,
+                    httpsScore.tail,
+                    httpsScore.jitter,
+                    httpsScore.availability,
+                    httpsScore.consistency,
+                ];
+                scoreChart.update();
+            }
 
             fillStatusTable(data);
             updateNote(data);

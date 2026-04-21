@@ -1,6 +1,6 @@
 # CCEN356 Project — HTTP/HTTPS Performance & Visibility
 
-Compare HTTP vs HTTPS performance using physical Cisco networking equipment, Python automation, Wireshark analysis, and data visualization.
+Compare HTTP vs HTTPS performance using physical Cisco networking equipment, Python automation, Scapy capture, and data visualization.
 
 ## Team
 
@@ -70,7 +70,7 @@ Connect the physical hardware:
 - R2 Gi0/1 → Server PC
 - Console cables from your laptop to R1 and R2 (for initial config)
 
-> **No dedicated monitor PC needed.** Wireshark will run directly on Client 2, capturing its own NIC traffic during the benchmark (Step 12).
+> **No dedicated monitor PC needed.** The Scapy capture script runs directly on Client 2, recording its own NIC traffic during the benchmark (Step 12).
 
 **Expected:** All link LEDs on the switch and router interfaces are green (amber during negotiation is normal — wait 30 seconds).
 
@@ -436,16 +436,15 @@ Invoke-WebRequest -Uri https://192.165.20.79 -SkipCertificateCheck -UseBasicPars
 
 ---
 
-### STEP 12 — Start Wireshark (on Client 2 — before running the benchmark)
+### STEP 12 — Start Scapy capture (on Client 2 — before running the benchmark)
 
-Client 2 will both generate the benchmark traffic (Step 15) and capture it with Wireshark at the same time.
+Client 2 will both generate the benchmark traffic (Step 15) and capture it with Scapy at the same time.
 
-1. Open Wireshark on Client 2.
-2. Select the **Ethernet** adapter (the one with IP `192.165.10.79`).
-3. Apply the capture filter: `tcp port 80 or tcp port 443`
-4. Click **Start** — leave it running through Steps 13–15.
+1. Open an Administrator PowerShell window on Client 2.
+2. Run `python scripts/capture_traffic.py`.
+3. Leave it running through Steps 13–15.
 
-**Expected:** Once `performance_metrics.py` starts in Step 15, you will immediately see TCP traffic appear. HTTP packets (port 80) will show readable request/response data in the packet details pane. HTTPS packets (port 443) will show encrypted `Application Data` records — no readable content visible. This contrast is the core observation for your report.
+**Expected:** Once `performance_metrics.py` starts in Step 15, the Scapy script will log HTTP and HTTPS packets to `data/traffic_log.csv`. HTTP packets (port 80) remain readable at the application layer, while HTTPS packets (port 443) are encrypted and should be analyzed through the CSV and the generated charts.
 
 ---
 
@@ -654,17 +653,16 @@ Important: The live dashboard measures endpoint latency and health only. Packet 
 
 ---
 
-### STEP 18 — Save Wireshark capture and screenshots
+### STEP 18 — Save Scapy capture and screenshots
 
-Stop the Wireshark capture (started in Step 12).
+Stop the Scapy capture (started in Step 12).
 
-1. **Save as** `wireshark_capture.pcapng` in the project folder.
-2. Apply filter `tcp.port == 80` — find and screenshot the **TCP 3-way handshake** (SYN, SYN-ACK, ACK).
-3. Apply filter `tcp.port == 443` — find and screenshot the **TLS handshake** (ClientHello, ServerHello, Certificate).
-4. Go to **Statistics → IO Graph** — screenshot the traffic rate chart.
-5. Go to **Statistics → TCP Stream Graphs → Round Trip Time** — screenshot the RTT graph.
+1. **Confirm** `data/traffic_log.csv` was created in the `data/` folder.
+2. Review the CSV for HTTP and HTTPS packet entries and save any relevant screenshots from your analysis tools.
+3. Export the generated charts from `visualize_traffic.py` for the report.
+4. Use the dashboard screenshot to show live latency and health monitoring.
 
-**Expected:** HTTP traffic should show plain-text data in packet details. HTTPS traffic should show encrypted TLS records (labeled `Application Data`) with no readable content — this is the visibility difference you are demonstrating.
+**Expected:** HTTP traffic should show readable application-layer data in the CSV and charts. HTTPS traffic should appear as encrypted TLS traffic and be summarized through the capture log, performance results, and visualization outputs.
 
 ---
 
@@ -709,5 +707,5 @@ Confirm all expected outputs exist before writing the report:
 | `charts/traffic_analysis.png` | `visualize_traffic.py` | Packet count + histogram |
 | `configs/R1_config.txt` | Manual export | Includes ACL + QoS |
 | `configs/R2_config.txt` | Manual export | Includes routes |
-| `wireshark_capture.pcapng` | Wireshark | Both HTTP and HTTPS traffic visible |
+| `data/traffic_log.csv` | `capture_traffic.py` | HTTP and HTTPS packet entries captured |
 | Dashboard screenshot | Browser | Advanced dashboard at 192.165.20.79:5000 (or localhost:5000 in local mode) |

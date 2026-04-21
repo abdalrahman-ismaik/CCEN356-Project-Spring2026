@@ -11,8 +11,8 @@ devices and desktop PCs, configure the necessary settings to monitor and analyze
 HTTP/HTTPS traƯic, and develop Python scripts to automate data collection and
 analysis, and visualization. This project will provide hands-on experience with both
 networking and programming, illustrating the integration of diƯerent technologies to
-enhance application performance. Additionally, Wireshark will be employed to dissect
-and inspect packet flow.
+enhance application performance. Additionally, Scapy will be employed to capture and
+inspect packet flow.
 Leaning Objectives:
 1. Understanding the fundamentals of HTTP/HTTPS protocols and their role in web
 communications.
@@ -20,7 +20,7 @@ communications.
 enhanced network performance.
 3. Develop Python scripts to automate network monitoring and traƯic analysis, and
 that can interact with network devices and perform traƯic simulations.
-4. Analyze HTTP/HTTPS traƯic using Wireshark to identify latency issues and
+4. Analyze HTTP/HTTPS traƯic using Scapy to identify latency issues and
 performance bottlenecks.
 5. Implement practical solutions to optimize network performance based on traƯic
 analysis.
@@ -28,7 +28,7 @@ Project Requirements:
 A. Network Topology
  2 Cisco 2901 Routers
  1 Cisco Switches
- Computers for running scripts and Wireshark, and as Clients
+ Computers for running scripts and packet capture, and as Clients
  Configuration for multiple clients and web server to simulate web traƯic
 B. Network Configuration Tasks
  Set up basic routing and switching configurations
@@ -39,14 +39,14 @@ C. Python Automation Tasks
 Students will write Python scripts to:
  Connect to routers and switches using SSH (recommended library:
 netmiko)
- Capture network traƯic using Wireshark (or Scapy), and filter for
+ Capture network traƯic using Scapy, and filter for
 HTTP/HTTPS packets
  Scripts capable of simulating HTTP/HTTPS requests and monitoring
 network performance metrics such as response time, throughput, and
 error rates.
  Generate visual reports of traƯic patterns using libraries such as
 Matplotlib
- Develop web-based dashboard using Flask to visualize traƯic data in realtime (optional)
+ Develop a web-based dashboard using Flask to visualize traƯic data in real time (optional)
 Project Deliverables:
 A. Written Report
  Network topology diagram
@@ -62,9 +62,9 @@ C. Source Code Repository
  All Python scripts developed throughout the project
  Configuration files (.txt exports from routers and switches)
  Comprehensive documentation of the project steps and configurations
-D. Wireshark Analysis Report
+D. Traffic Analysis Report
  A comprehensive report that includes screenshots and analysis of
-captures HTTP/HTTPS traƯic, focusing on performance metrics and any
+captured HTTP/HTTPS traƯic, focusing on performance metrics and any
 identified issues.
 Additional Recommendations (Optional)
 1. Automated Performance Monitoring
