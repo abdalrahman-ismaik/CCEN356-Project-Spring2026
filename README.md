@@ -535,27 +535,69 @@ After the capture in Step 14 completes and Step 15 is done:
 python scripts/visualize_traffic.py
 ```
 
-**Expected:** Two PNG files are created:
+**Expected:** Two advanced, publication-ready PNG files are created:
 ```
-charts/performance_comparison.png   (bar charts: avg time, throughput, min/avg/max)
-charts/traffic_analysis.png         (packet count by protocol, size distribution histogram)
+charts/performance_comparison.png   (executive storyboard: latency+stdev, reliability, throughput, latency envelope, tail/jitter indicators)
+charts/traffic_analysis.png         (capture intelligence: packets/s timeline, protocol share donut, size histogram, CDF, top conversations)
 ```
-Open both files to confirm they display readable charts with labeled axes and data for both HTTP and HTTPS.
+Open both files and verify the following quality checks:
+
+- Clear distinction between HTTP and HTTPS in all panels
+- Axis titles, legends, and value annotations are readable
+- No empty panels (unless one protocol genuinely has zero packets)
+- Key conclusions are visible without manual calculation (for example, average latency delta and reliability trend)
+
+If charts are blank or incomplete, confirm both source files exist and are populated:
+
+```powershell
+Get-Item data\performance_results.csv, data\traffic_log.csv | Select-Object FullName, Length
+```
 
 ---
 
 ### STEP 17 — Launch the live dashboard
 
+You can run the dashboard in either mode. For demos and team monitoring, **Mode A (Server PC)** is recommended.
+
+**Mode A - Run on Server PC (shared dashboard for all clients):**
+
+1. Open port 5000 on the Server PC (Administrator PowerShell):
+
+```powershell
+New-NetFirewallRule -DisplayName "CCEN356 Dashboard" -Direction Inbound -LocalPort 5000 -Protocol TCP -Action Allow
+```
+
+2. Start the dashboard on the Server PC:
+
 ```powershell
 python scripts/dashboard.py
 ```
 
-Then open a browser and go to: **http://localhost:5000**
+3. From any client PC browser, open:
 
-**Expected:** A dark-themed web page with a real-time Chart.js line chart that updates every 3 seconds showing HTTP and HTTPS response times.
+```text
+http://192.165.20.79:5000
+```
 
-- If both server endpoints are reachable, the status bar shows **HTTP OK | HTTPS OK**.
-- If an endpoint is unreachable, the status bar shows **HTTP DOWN** and/or **HTTPS DOWN** with the last connection error.
+**Mode B - Run on a Client PC (local-only view on that machine):**
+
+```powershell
+python scripts/dashboard.py
+```
+
+Then open: **http://localhost:5000** on that same client.
+
+**Expected (advanced dashboard):**
+
+- KPI cards for HTTP avg, HTTPS avg, latency delta, and fastest protocol
+- Real-time latency timeline
+- Avg/P95/P99 comparison chart
+- Reliability chart (uptime + failures)
+- Performance profile radar (latency, tail, jitter, availability, consistency)
+- Endpoint status matrix with last status code, last latency, checks/failures, and last error
+
+- If both monitored targets are reachable, status badges show **UP**.
+- If a target is unreachable, it shows **DOWN** plus last error details in the status matrix.
 
 The `/api/metrics` endpoint returns JSON like:
 
@@ -564,22 +606,31 @@ curl http://localhost:5000/api/metrics
 ```
 ```json
 {
-  "http_avg_ms": 12.4,
-  "https_avg_ms": 31.7,
-  "http_samples": [11.9, 12.1, 12.4],
-  "https_samples": [29.8, 31.2, 31.7],
-  "http_status": {
-    "ok": true,
-    "last_error": "",
-    "last_status_code": 200
+  "http": {
+    "avg_ms": 12.4,
+    "p95_ms": 18.8,
+    "p99_ms": 21.1,
+    "jitter_ms": 1.7,
+    "uptime_pct": 100.0,
+    "is_up": true
   },
-  "https_status": {
-    "ok": true,
-    "last_error": "",
-    "last_status_code": 200
+  "https": {
+    "avg_ms": 31.7,
+    "p95_ms": 44.3,
+    "p99_ms": 48.2,
+    "jitter_ms": 3.9,
+    "uptime_pct": 100.0,
+    "is_up": true
   },
-  "http_target": "http://192.165.20.79",
-  "https_target": "https://192.165.20.79"
+  "comparison": {
+    "avg_delta_ms": 19.3,
+    "faster_protocol": "HTTP"
+  },
+  "timeline": {
+    "labels": ["11:10:21", "11:10:24"],
+    "http_ms": [12.0, 12.9],
+    "https_ms": [30.4, 32.7]
+  }
 }
 ```
 
@@ -589,6 +640,7 @@ Optional target override from the Client PC (PowerShell):
 ```powershell
 $env:CCEN356_HTTP_URL="http://192.165.20.79"
 $env:CCEN356_HTTPS_URL="https://192.165.20.79"
+$env:CCEN356_DASHBOARD_PORT="5000"
 python scripts/dashboard.py
 ```
 
@@ -650,4 +702,4 @@ Confirm all expected outputs exist before writing the report:
 | `configs/R1_config.txt` | Manual export | Includes ACL + QoS |
 | `configs/R2_config.txt` | Manual export | Includes routes |
 | `wireshark_capture.pcapng` | Wireshark | Both HTTP and HTTPS traffic visible |
-| Dashboard screenshot | Browser | Chart.js graph at localhost:5000 |
+| Dashboard screenshot | Browser | Advanced dashboard at 192.165.20.79:5000 (or localhost:5000 in local mode) |
