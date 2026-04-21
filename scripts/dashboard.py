@@ -12,13 +12,24 @@ import threading
 import time
 import requests
 import urllib3
+import os
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
 # Shared metrics store (last 100 samples per protocol)
-live_metrics = {"http": [], "https": []}
+live_metrics = {
+    "http": [],
+    "https": [],
+    "status": {
+        "http": {"ok": False, "last_error": "not sampled yet", "last_status_code": None},
+        "https": {"ok": False, "last_error": "not sampled yet", "last_status_code": None},
+    }
+}
+
+HTTP_TARGET = os.getenv("CCEN356_HTTP_URL", "http://192.165.20.79")
+HTTPS_TARGET = os.getenv("CCEN356_HTTPS_URL", "https://192.165.20.79")
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -31,6 +42,9 @@ DASHBOARD_HTML = """
         h1   { text-align: center; color: #e94560; margin-bottom: 5px; }
         .subtitle { text-align: center; color: #aaa; font-size: 14px; margin-bottom: 20px; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; }
+        .status-bar { margin: 15px 0; padding: 10px 12px; border-radius: 8px; background: #242843; color: #d8d8d8; font-size: 13px; }
+        .ok { color: #4CAF50; font-weight: bold; }
+        .bad { color: #ff6b6b; font-weight: bold; }
         .card { background: #16213e; border-radius: 10px; padding: 20px; }
         .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 20px; }
         .stat-card { background: #16213e; border-radius: 10px; padding: 15px; text-align: center; }
@@ -44,6 +58,7 @@ DASHBOARD_HTML = """
 <body>
     <h1>HTTP/HTTPS Live Performance Dashboard</h1>
     <p class="subtitle">CCEN356 Project &mdash; Auto-refreshes every 3 seconds</p>
+    <div class="status-bar" id="statusBar">Checking server reachability...</div>
 
     <div class="stats">
         <div class="stat-card">
@@ -110,8 +125,14 @@ DASHBOARD_HTML = """
 
                 document.getElementById('httpAvg').textContent = data.http_avg_ms.toFixed(1);
                 document.getElementById('httpsAvg').textContent = data.https_avg_ms.toFixed(1);
-                document.getElementById('httpSamples').textContent = data.http_samples;
-                document.getElementById('httpsSamples').textContent = data.https_samples;
+                document.getElementById('httpSamples').textContent = data.http_samples.length;
+                document.getElementById('httpsSamples').textContent = data.https_samples.length;
+
+                const httpOk = data.http_status.ok;
+                const httpsOk = data.https_status.ok;
+                const httpState = httpOk ? '<span class="ok">HTTP OK</span>' : `<span class="bad">HTTP DOWN</span> (${data.http_status.last_error})`;
+                const httpsState = httpsOk ? '<span class="ok">HTTPS OK</span>' : `<span class="bad">HTTPS DOWN</span> (${data.https_status.last_error})`;
+                document.getElementById('statusBar').innerHTML = `${httpState} | ${httpsState}`;
             } catch (e) {
                 console.error('Failed to fetch metrics:', e);
             }
@@ -127,8 +148,8 @@ DASHBOARD_HTML = """
 def background_collector():
     """Background thread that continuously pings HTTP and HTTPS servers."""
     targets = [
-        ("http://192.165.20.79", "http"),
-        ("https://192.165.20.79", "https"),
+        (HTTP_TARGET, "http"),
+        (HTTPS_TARGET, "https"),
     ]
     while True:
         for url, key in targets:
@@ -136,11 +157,16 @@ def background_collector():
                 start = time.time()
                 r = requests.get(url, timeout=5, verify=False)
                 elapsed = (time.time() - start) * 1000
-                live_metrics[key].append({"ms": elapsed, "bytes": len(r.content)})
+                live_metrics[key].append(round(elapsed, 2))
                 if len(live_metrics[key]) > 100:
                     live_metrics[key].pop(0)
-            except Exception:
-                pass
+                live_metrics["status"][key]["ok"] = True
+                live_metrics["status"][key]["last_status_code"] = r.status_code
+                live_metrics["status"][key]["last_error"] = ""
+            except Exception as e:
+                live_metrics["status"][key]["ok"] = False
+                live_metrics["status"][key]["last_status_code"] = None
+                live_metrics["status"][key]["last_error"] = str(e)
         time.sleep(3)
 
 
@@ -151,14 +177,18 @@ def index():
 
 @app.route('/api/metrics')
 def metrics_api():
-    def avg(lst, key):
-        return round(sum(x[key] for x in lst) / len(lst), 2) if lst else 0
+    def avg(lst):
+        return round(sum(lst) / len(lst), 2) if lst else 0
 
     return jsonify({
-        "http_avg_ms": avg(live_metrics["http"], "ms"),
-        "https_avg_ms": avg(live_metrics["https"], "ms"),
-        "http_samples": len(live_metrics["http"]),
-        "https_samples": len(live_metrics["https"]),
+        "http_avg_ms": avg(live_metrics["http"]),
+        "https_avg_ms": avg(live_metrics["https"]),
+        "http_samples": live_metrics["http"][-20:],
+        "https_samples": live_metrics["https"][-20:],
+        "http_status": live_metrics["status"]["http"],
+        "https_status": live_metrics["status"]["https"],
+        "http_target": HTTP_TARGET,
+        "https_target": HTTPS_TARGET,
     })
 
 
@@ -166,4 +196,5 @@ if __name__ == '__main__':
     t = threading.Thread(target=background_collector, daemon=True)
     t.start()
     print("Dashboard running at http://0.0.0.0:5000")
+    print(f"Monitoring targets: HTTP={HTTP_TARGET} HTTPS={HTTPS_TARGET}")
     app.run(host='0.0.0.0', port=5000, debug=False)
