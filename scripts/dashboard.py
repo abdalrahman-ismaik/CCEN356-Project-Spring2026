@@ -36,6 +36,10 @@ DASHBOARD_PORT = int(os.getenv("CCEN356_DASHBOARD_PORT", "5000"))
 POLL_INTERVAL_SEC = float(os.getenv("CCEN356_POLL_INTERVAL_SEC", "0.5"))
 REQUEST_TIMEOUT_SEC = float(os.getenv("CCEN356_REQUEST_TIMEOUT_SEC", "1.5"))
 MAX_SAMPLES = int(os.getenv("CCEN356_DASHBOARD_MAX_SAMPLES", "240"))
+ML_FORECAST_HORIZON = max(1, int(os.getenv("CCEN356_ML_FORECAST_HORIZON", "5")))
+ML_MIN_POINTS = max(4, int(os.getenv("CCEN356_ML_MIN_POINTS", "8")))
+ML_HIGH_LATENCY_MS = max(1.0, float(os.getenv("CCEN356_ML_HIGH_LATENCY_MS", "120")))
+ML_HIGH_JITTER_MS = max(0.5, float(os.getenv("CCEN356_ML_HIGH_JITTER_MS", "20")))
 
 QOS_MODE_HEADER = os.getenv("CCEN356_QOS_MODE_HEADER", "X-CCEN356-QOS-MODE")
 QOS_MODE_VALUE = os.getenv("CCEN356_QOS_MODE_VALUE", "on")
@@ -188,6 +192,131 @@ def _jitter(values):
 def _score_from_latency(value, factor, ceiling=100.0):
     score = max(0.0, ceiling - (value * factor))
     return min(100.0, score)
+
+
+def _clamp(value, lower, upper):
+    return max(lower, min(upper, value))
+
+
+def _clean_numeric(values):
+    return [float(v) for v in values if v is not None and not math.isnan(v)]
+
+
+def _linear_forecast(values, horizon):
+    cleaned = _clean_numeric(values)
+    if not cleaned:
+        return [0.0] * horizon, 0.0, 0.0
+    if len(cleaned) == 1:
+        return [cleaned[0]] * horizon, 0.0, 0.2
+
+    n = len(cleaned)
+    xs = list(range(n))
+    mean_x = (n - 1) / 2.0
+    mean_y = sum(cleaned) / n
+
+    numerator = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, cleaned))
+    denominator = sum((x - mean_x) ** 2 for x in xs)
+    slope = numerator / denominator if denominator else 0.0
+    intercept = mean_y - (slope * mean_x)
+
+    forecast = []
+    for step in range(1, horizon + 1):
+        x = n - 1 + step
+        forecast.append(max(0.0, (slope * x) + intercept))
+
+    volatility = statistics.stdev(cleaned) if len(cleaned) > 1 else 0.0
+    confidence = 1.0 / (1.0 + (volatility / max(mean_y, 1.0)))
+    confidence = _clamp(confidence, 0.2, 0.98)
+
+    return forecast, slope, confidence
+
+
+def _protocol_ml_analysis(label, endpoint_summary, endpoint_snapshot):
+    history = endpoint_snapshot.get("latencies", [])[-60:]
+    forecast, slope, confidence = _linear_forecast(history, ML_FORECAST_HORIZON)
+    predicted_next = forecast[0] if forecast else 0.0
+
+    trend = "stable"
+    if slope > 0.6:
+        trend = "degrading"
+    elif slope < -0.6:
+        trend = "improving"
+
+    checks = endpoint_summary.get("checks", 0)
+    failures = endpoint_summary.get("failures", 0)
+    failure_rate = (failures / checks * 100.0) if checks else 0.0
+
+    risk_score = 0.0
+    issues = []
+
+    if endpoint_summary.get("p95_ms", 0.0) >= ML_HIGH_LATENCY_MS:
+        risk_score += 35
+        issues.append(f"{label} tail latency above {ML_HIGH_LATENCY_MS:.0f}ms")
+    if endpoint_summary.get("jitter_ms", 0.0) >= ML_HIGH_JITTER_MS:
+        risk_score += 20
+        issues.append(f"{label} jitter above {ML_HIGH_JITTER_MS:.0f}ms")
+    if failure_rate >= 5.0:
+        risk_score += 30
+        issues.append(f"{label} failure rate >= 5%")
+    elif failure_rate > 0.0:
+        risk_score += 15
+        issues.append(f"{label} has intermittent failures")
+    if trend == "degrading":
+        risk_score += 20
+        issues.append(f"{label} trend is degrading")
+
+    baseline = endpoint_summary.get("avg_ms", 0.0)
+    if baseline > 0 and predicted_next >= (baseline * 1.2):
+        risk_score += 10
+        issues.append(f"{label} next sample predicted above current baseline")
+
+    risk_score = _clamp(risk_score, 0.0, 100.0)
+
+    if risk_score >= 75:
+        risk_level = "critical"
+    elif risk_score >= 50:
+        risk_level = "high"
+    elif risk_score >= 25:
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+
+    return {
+        "trend": trend,
+        "slope_ms_per_sample": _round_or_zero(slope, 3),
+        "confidence": _round_or_zero(confidence * 100.0, 1),
+        "predicted_next_ms": _round_or_zero(predicted_next, 2),
+        "forecast_ms": [_round_or_zero(v, 2) for v in forecast],
+        "risk_score": _round_or_zero(risk_score, 1),
+        "risk_level": risk_level,
+        "issue_predicted": risk_score >= 50.0,
+        "issues": issues,
+    }
+
+
+def _ml_analysis(http_summary, https_summary, endpoint_snapshot):
+    http_ml = _protocol_ml_analysis("HTTP", http_summary, endpoint_snapshot["http"])
+    https_ml = _protocol_ml_analysis("HTTPS", https_summary, endpoint_snapshot["https"])
+
+    combined_risk = _round_or_zero(max(http_ml["risk_score"], https_ml["risk_score"]), 1)
+    risk_shift = _round_or_zero(https_ml["predicted_next_ms"] - http_ml["predicted_next_ms"], 2)
+
+    summary = (
+        f"Forecast next latency: HTTP {http_ml['predicted_next_ms']}ms, "
+        f"HTTPS {https_ml['predicted_next_ms']}ms."
+    )
+    if http_ml["issue_predicted"] or https_ml["issue_predicted"]:
+        summary += " Potential performance issue detected; review jitter/tail latency and failure spikes."
+    else:
+        summary += " No immediate performance issue predicted."
+
+    return {
+        "http": http_ml,
+        "https": https_ml,
+        "combined_risk": combined_risk,
+        "predicted_delta_ms": risk_shift,
+        "summary": summary,
+    }
 
 
 def _summarize(endpoint_state):
@@ -378,6 +507,8 @@ def _build_profile_payload(mode_key, profile_snapshot):
     else:
         faster_protocol = "HTTP" if http_summary["avg_ms"] <= https_summary["avg_ms"] else "HTTPS"
 
+    ml_analysis = _ml_analysis(http_summary, https_summary, endpoints)
+
     return {
         "mode": mode_key,
         "label": DASHBOARD_MODES[mode_key]["label"],
@@ -415,6 +546,7 @@ def _build_profile_payload(mode_key, profile_snapshot):
             "jitter_delta_ms": jitter_delta,
             "faster_protocol": faster_protocol,
         },
+        "ml_analysis": ml_analysis,
     }
 
 
@@ -432,6 +564,9 @@ def _build_payload():
         "http_avg_change_ms": _round_or_zero(with_qos["http"]["avg_ms"] - without_qos["http"]["avg_ms"], 2),
         "https_avg_change_ms": _round_or_zero(with_qos["https"]["avg_ms"] - without_qos["https"]["avg_ms"], 2),
         "delta_shift_ms": _round_or_zero(with_qos["comparison"]["avg_delta_ms"] - without_qos["comparison"]["avg_delta_ms"], 2),
+        "combined_risk_shift": _round_or_zero(
+            with_qos["ml_analysis"]["combined_risk"] - without_qos["ml_analysis"]["combined_risk"], 2
+        ),
         "without_qos_faster_protocol": without_qos["comparison"]["faster_protocol"],
         "with_qos_faster_protocol": with_qos["comparison"]["faster_protocol"],
     }
@@ -459,6 +594,7 @@ def _build_payload():
         "http": active_profile["http"],
         "https": active_profile["https"],
         "comparison": active_profile["comparison"],
+        "ml_analysis": active_profile["ml_analysis"],
         # Backward-compatible keys for existing integrations.
         "http_avg_ms": active_profile["http"]["avg_ms"],
         "https_avg_ms": active_profile["https"]["avg_ms"],
@@ -813,6 +949,17 @@ DASHBOARD_HTML = """
                 <div class="kpi-label">Fastest Protocol</div>
                 <div class="kpi-value" id="fastestProtocol">N/A</div>
             </article>
+        </section>
+
+        <section class="panel status-strip">
+            <div class="pill"><strong>ML HTTP Next:</strong> <span id="mlHttpNext">-</span></div>
+            <div class="pill"><strong>ML HTTPS Next:</strong> <span id="mlHttpsNext">-</span></div>
+            <div class="pill"><strong>ML Risk:</strong> <span id="mlRisk">-</span></div>
+            <div class="pill"><strong>ML Trend:</strong> <span id="mlTrend">-</span></div>
+        </section>
+
+        <section class="panel alert-box" id="mlSummary">
+            ML analysis warming up. Collecting baseline samples for prediction.
         </section>
 
         <section class="grid">
@@ -1316,6 +1463,48 @@ DASHBOARD_HTML = """
             note.textContent = `${modeLabel}: avg delta (HTTPS - HTTP) is ${toFixedSafe(profileData.comparison.avg_delta_ms, 2)} ms. QoS shift: ${toFixedSafe(shift, 2)} ms (${trend}).`;
         }
 
+        function updateMlPanel(profileData) {
+            const ml = profileData.ml_analysis || {};
+            const httpMl = ml.http || {};
+            const httpsMl = ml.https || {};
+
+            const httpNext = Number(httpMl.predicted_next_ms);
+            const httpsNext = Number(httpsMl.predicted_next_ms);
+            const risk = Number(ml.combined_risk);
+
+            document.getElementById('mlHttpNext').textContent = Number.isFinite(httpNext)
+                ? `${toFixedSafe(httpNext, 2)} ms`
+                : 'n/a';
+            document.getElementById('mlHttpsNext').textContent = Number.isFinite(httpsNext)
+                ? `${toFixedSafe(httpsNext, 2)} ms`
+                : 'n/a';
+
+            const riskText = Number.isFinite(risk)
+                ? `${toFixedSafe(risk, 1)} / 100`
+                : 'n/a';
+            document.getElementById('mlRisk').textContent = riskText;
+
+            const trendText = `HTTP ${httpMl.trend || 'n/a'} • HTTPS ${httpsMl.trend || 'n/a'}`;
+            document.getElementById('mlTrend').textContent = trendText;
+
+            const summary = ml.summary || 'ML analysis warming up. Collecting baseline samples for prediction.';
+            const mlSummary = document.getElementById('mlSummary');
+
+            const risks = [];
+            if (Array.isArray(httpMl.issues) && httpMl.issues.length) {
+                risks.push(...httpMl.issues);
+            }
+            if (Array.isArray(httpsMl.issues) && httpsMl.issues.length) {
+                risks.push(...httpsMl.issues);
+            }
+
+            if (risks.length > 0) {
+                mlSummary.textContent = `${summary} Signals: ${risks.slice(0, 3).join(' | ')}`;
+            } else {
+                mlSummary.textContent = summary;
+            }
+        }
+
         function updateDashboard(payload) {
             window.__lastPayload = payload;
 
@@ -1394,6 +1583,7 @@ DASHBOARD_HTML = """
             }
 
             fillStatusTable(data);
+            updateMlPanel(data);
             updateNote(data, payload);
         }
 

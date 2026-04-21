@@ -598,6 +598,7 @@ Then open: **http://localhost:5000** on that same client.
 
 - Top-right toggle to switch **Without QoS** vs **With QoS** view instantly
 - KPI cards for HTTP avg, HTTPS avg, latency delta, and fastest protocol
+- Built-in **ML Insights (MVP)**: next-latency prediction, trend detection, and performance-issue risk score from recent historical samples
 - Real-time latency timeline
 - Avg/P95/P99 comparison chart
 - Reliability chart (uptime + failures)
@@ -661,6 +662,15 @@ Optional real-time tuning (PowerShell):
 $env:CCEN356_POLL_INTERVAL_SEC="0.8"
 $env:CCEN356_REQUEST_TIMEOUT_SEC="1.2"
 $env:CCEN356_DASHBOARD_MAX_SAMPLES="360"
+python scripts/dashboard.py
+```
+
+Optional ML analysis tuning (PowerShell):
+```powershell
+$env:CCEN356_ML_FORECAST_HORIZON="5"     # predicted points ahead
+$env:CCEN356_ML_MIN_POINTS="8"            # minimum samples before stronger signal
+$env:CCEN356_ML_HIGH_LATENCY_MS="120"     # high-latency threshold
+$env:CCEN356_ML_HIGH_JITTER_MS="20"       # high-jitter threshold
 python scripts/dashboard.py
 ```
 
