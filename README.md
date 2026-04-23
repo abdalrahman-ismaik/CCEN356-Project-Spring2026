@@ -120,23 +120,30 @@ interface GigabitEthernet0/0
  ip access-group HTTP_HTTPS_ONLY in
  exit
 
-ip access-list extended WEB_QOS_PORTS
- permit tcp any any eq 80
+ip access-list extended HTTPS_ONLY
  permit tcp any any eq 443
- permit tcp any eq 80 any
  permit tcp any eq 443 any
  exit
 
-class-map match-any HTTP_HTTPS
- match access-group name WEB_QOS_PORTS
+ip access-list extended HTTP_ONLY
+ permit tcp any any eq 80
+ permit tcp any eq 80 any
+ exit
+
+class-map match-any CM_HTTPS
+ match access-group name HTTPS_ONLY
+ exit
+
+class-map match-any CM_HTTP
+ match access-group name HTTP_ONLY
  exit
 
 policy-map WEB_QOS
- class HTTP_HTTPS
-  no bandwidth
-  no bandwidth percent
+ class CM_HTTPS
   priority percent 30
   ! If your IOS image rejects the line above, use: priority 1000
+ class CM_HTTP
+  bandwidth percent 10
  class class-default
   fair-queue
  exit
@@ -160,6 +167,23 @@ Both `GigabitEthernet0/0` and `GigabitEthernet0/1` should show **up/up**.
 show ip ssh
 ```
 Should say `SSH Enabled - version 2.0`.
+
+Run QoS verification commands:
+
+```
+show policy-map interface GigabitEthernet0/0
+show access-lists HTTPS_ONLY
+show access-lists HTTP_ONLY
+show running-config | section policy-map|class-map|access-list|service-policy
+```
+
+**Expected:**
+- `show policy-map interface GigabitEthernet0/0` shows `Service-policy output: WEB_QOS` with `Class-map: CM_HTTPS` and `Class-map: CM_HTTP`.
+- `show access-lists HTTPS_ONLY` and `show access-lists HTTP_ONLY` return the two permit lines for ports 443 and 80 respectively.
+- `show running-config | section policy-map|class-map|access-list|service-policy` shows the QoS/ACL wiring (`HTTPS_ONLY`, `HTTP_ONLY`, `CM_HTTPS`, `CM_HTTP`, and `service-policy output WEB_QOS`).
+- During active client traffic, packet counters for both classes/ACLs should increase.
+
+If you see `how access-lists ...`, that is a typo; use `show access-lists ...`.
 
 ---
 
@@ -397,11 +421,13 @@ Open **two separate PowerShell terminals** on the Server PC and run one command 
 
 **Terminal 1 — HTTP server (run as Administrator for port 80):**
 ```powershell
+set CCEN356_QOS_HTTP_DELAY_MS=25
 python server\http_server.py
 ```
 
 **Terminal 2 — HTTPS server (run as Administrator for port 443):**
 ```powershell
+set CCEN356_QOS_HTTPS_DELAY_MS=0
 python server\secured_server.py
 ```
 
