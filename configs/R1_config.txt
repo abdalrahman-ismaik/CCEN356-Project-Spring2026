@@ -3,3 +3,110 @@
 ! Paste full output here after lab setup.
 !
 ! Expected config: see REFERENCE_PROMPT.md → Cisco Router Configurations → R1
+
+
+Current configuration : 1709 bytes
+!
+! Last configuration change at 11:59:04 UTC Thu Apr 23 2026
+!
+version 15.0
+service timestamps debug datetime msec
+service timestamps log datetime msec
+no service password-encryption
+!
+hostname R1
+!
+boot-start-marker
+boot-end-marker
+!
+enable secret 5 $1$bNtu$Y2bIHqqCF//1ZNYPTrlYV0
+!
+no aaa new-model
+!         
+no ipv6 cef
+ip source-route
+ip cef
+!
+!
+!
+!
+ip domain name lab.local
+multilink bundle-name authenticated
+!
+!
+!
+!
+license udi pid CISCO2901/K9 sn FGL151623F1
+!
+!
+username admin privilege 15 secret 5 $1$0fOp$3xGkGFNFrrFvM3B/Fy3qz.
+!         
+!
+ip ssh version 2
+!
+class-map match-any CM_HTTPS
+ match access-group name HTTPS_ONLY
+class-map match-any CM_HTTP
+ match access-group name HTTP_ONLY
+!
+!
+policy-map WEB_QOS
+ class CM_HTTPS
+    priority percent 30
+ class CM_HTTP
+    bandwidth percent 10
+ class class-default
+    fair-queue
+!
+!         
+!
+!
+!
+interface GigabitEthernet0/0
+ ip address 10.1.5.21 255.255.255.252
+ ip access-group HTTP_HTTPS_ONLY in
+ duplex auto
+ speed auto
+ service-policy output WEB_QOS
+!
+interface GigabitEthernet0/1
+ ip address 192.165.10.37 255.255.255.0
+ duplex auto
+ speed auto
+!
+ip forward-protocol nd
+!
+no ip http server
+no ip http secure-server
+!
+ip route 192.165.20.0 255.255.255.0 10.1.5.22
+!
+ip access-list extended HTTPS_ONLY
+ permit tcp any any eq 443
+ permit tcp any eq 443 any
+ip access-list extended HTTP_HTTPS_ONLY
+ permit tcp any any eq www
+ permit tcp any any eq 443
+ permit tcp any eq www any established
+ permit tcp any eq 443 any established
+ permit icmp any any
+ip access-list extended HTTP_ONLY
+ permit tcp any any eq www
+ permit tcp any eq www any
+!
+!         
+!
+!
+control-plane
+!
+!
+line con 0
+line aux 0
+line vty 0 4
+ login local
+ transport input ssh
+!
+scheduler allocate 20000 1000
+end
+
+R1#      

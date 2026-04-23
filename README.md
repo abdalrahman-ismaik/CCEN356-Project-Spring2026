@@ -786,6 +786,27 @@ show running-config
 ```
 Paste into `configs/R2_config.txt`.
 
+If SSH to `192.165.20.37` times out but ping works, your R1 WAN ACL is likely
+allowing web traffic only. Add temporary SSH management permits on R1:
+
+```text
+conf t
+ip access-list extended HTTP_HTTPS_ONLY
+ 5 permit tcp any host 192.165.20.37 eq 22
+ 6 permit tcp host 192.165.20.37 eq 22 any established
+end
+write memory
+show access-lists HTTP_HTTPS_ONLY
+```
+
+Then retry SSH to R2. If it still fails, verify SSH is enabled on R2:
+
+```text
+show ip ssh
+show ip interface brief
+show running-config | section line vty|username|ip ssh
+```
+
 **Expected:** Both files contain the full `show running-config` output including interface IPs, route statements, ACL, and QoS policy (R1 only). Verify ACL hit counters are non-zero:
 ```
 show access-lists
