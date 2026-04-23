@@ -41,6 +41,8 @@ logger = _configure_async_logger('server.log', 'secured_server')
 
 QOS_MODE_HEADER = os.getenv("CCEN356_QOS_MODE_HEADER", "X-CCEN356-QOS-MODE")
 QOS_MODE_VALUE = os.getenv("CCEN356_QOS_MODE_VALUE", "on").strip().lower()
+HTTPS_BASE_DELAY_MS = max(0.0, float(os.getenv("CCEN356_HTTPS_BASE_DELAY_MS", "0")))
+QOS_HTTPS_RELIEF_MS = max(0.0, float(os.getenv("CCEN356_QOS_HTTPS_RELIEF_MS", "0")))
 QOS_HTTPS_DELAY_MS = max(0.0, float(os.getenv("CCEN356_QOS_HTTPS_DELAY_MS", "0")))
 
 app = Flask(
@@ -53,13 +55,28 @@ def _is_qos_mode_enabled(req):
     return req.headers.get(QOS_MODE_HEADER, "").strip().lower() == QOS_MODE_VALUE
 
 
+def _calculate_https_delay_ms(req):
+    """Compute effective HTTPS service delay.
+
+    Base delay can represent queueing under load; QoS mode can remove part of that
+    delay via relief, then apply any explicit QoS-mode delay.
+    """
+    delay_ms = HTTPS_BASE_DELAY_MS
+    if _is_qos_mode_enabled(req):
+        delay_ms = max(0.0, delay_ms - QOS_HTTPS_RELIEF_MS)
+        delay_ms += QOS_HTTPS_DELAY_MS
+    return delay_ms
+
+
 @app.before_request
 def validate_path():
     if '..' in request.path:
         logger.warning(f"Directory traversal attempt from {request.remote_addr}: {request.path}")
         abort(403)
-    if _is_qos_mode_enabled(request) and QOS_HTTPS_DELAY_MS > 0:
-        time.sleep(QOS_HTTPS_DELAY_MS / 1000.0)
+    delay_ms = _calculate_https_delay_ms(request)
+    request.environ["ccen356_https_qos_delay_ms"] = delay_ms
+    if delay_ms > 0:
+        time.sleep(delay_ms / 1000.0)
 
 
 @app.after_request
@@ -70,10 +87,12 @@ def add_security_headers(response):
     response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     response.headers['Content-Security-Policy'] = "default-src 'self'"
     qos_mode = "on" if _is_qos_mode_enabled(request) else "off"
+    delay_ms = float(request.environ.get("ccen356_https_qos_delay_ms", 0.0))
     response.headers[QOS_MODE_HEADER] = qos_mode
+    response.headers["X-CCEN356-QOS-HTTPS-Delay-Ms"] = f"{delay_ms:.2f}"
     logger.info(
         f"Request from {request.remote_addr}: {request.method} {request.path} "
-        f"— {response.status_code} (qos={qos_mode})"
+        f"— {response.status_code} (qos={qos_mode}, delay_ms={delay_ms:.2f})"
     )
     return response
 
@@ -116,7 +135,12 @@ if __name__ == '__main__':
         exit(1)
 
     print("HTTPS server starting on https://0.0.0.0:443")
-    print(f"QoS mode header: {QOS_MODE_HEADER}={QOS_MODE_VALUE} | HTTPS delay: {QOS_HTTPS_DELAY_MS}ms")
+    print(
+        f"QoS mode header: {QOS_MODE_HEADER}={QOS_MODE_VALUE} | "
+        f"HTTPS base delay: {HTTPS_BASE_DELAY_MS}ms | "
+        f"QoS relief: {QOS_HTTPS_RELIEF_MS}ms | "
+        f"QoS-mode additive delay: {QOS_HTTPS_DELAY_MS}ms"
+    )
     app.run(
         host='0.0.0.0',
         port=443,

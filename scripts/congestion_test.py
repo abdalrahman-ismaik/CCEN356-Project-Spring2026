@@ -19,6 +19,7 @@ import statistics
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import urllib3
@@ -27,8 +28,27 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 DEFAULT_HTTP_URL = os.getenv("CCEN356_HTTP_URL", "http://192.165.20.79")
 DEFAULT_HTTPS_URL = os.getenv("CCEN356_HTTPS_URL", "https://192.165.20.79")
+DEFAULT_CONGESTION_PATH = os.getenv("CCEN356_CONGESTION_PATH", "/show-something")
 QOS_HEADER = os.getenv("CCEN356_QOS_MODE_HEADER", "X-CCEN356-QOS-MODE")
 QOS_VALUE = os.getenv("CCEN356_QOS_MODE_VALUE", "on")
+
+
+def build_target_url(base_url, path):
+    """Attach a path/query to a base URL while preserving scheme and host."""
+    if not path:
+        return base_url
+
+    if path.startswith("http://") or path.startswith("https://"):
+        return path
+
+    parsed = urlsplit(base_url)
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    if "?" in normalized_path:
+        request_path, request_query = normalized_path.split("?", 1)
+    else:
+        request_path, request_query = normalized_path, ""
+
+    return urlunsplit((parsed.scheme, parsed.netloc, request_path, request_query, ""))
 
 
 def qos_headers_for_priority(priority_mode):
@@ -122,20 +142,36 @@ def percentile(values, p):
     return (ordered[lower] * lower_weight) + (ordered[upper] * upper_weight)
 
 
-def worker(url, verify_tls, timeout_sec, headers, stop_event, stats):
-    session = requests.Session()
+def worker(url, verify_tls, timeout_sec, headers, stop_event, stats, reuse_session):
+    session = requests.Session() if reuse_session else None
+    request_headers = dict(headers) if headers else {}
+    if not reuse_session:
+        # Force short-lived connections so protocol latency reacts to congestion.
+        request_headers["Connection"] = "close"
+
     while not stop_event.is_set():
         start = time.perf_counter()
         try:
-            response = session.get(url, timeout=timeout_sec, verify=verify_tls, headers=headers)
+            if session is not None:
+                response = session.get(url, timeout=timeout_sec, verify=verify_tls, headers=request_headers)
+            else:
+                response = requests.get(url, timeout=timeout_sec, verify=verify_tls, headers=request_headers)
+
+            if response.status_code >= 400:
+                stats.add_error()
+                continue
+
             latency_ms = (time.perf_counter() - start) * 1000.0
             stats.add_success(latency_ms, len(response.content))
         except Exception:
             stats.add_error()
 
+    if session is not None:
+        session.close()
 
 
-def run_test(http_url, https_url, duration_sec, concurrency, timeout_sec, priority_mode):
+
+def run_test(http_url, https_url, duration_sec, concurrency, timeout_sec, priority_mode, reuse_session):
     # Split workers evenly so both protocols are stressed at the same time.
     http_workers = max(1, concurrency // 2)
     https_workers = max(1, concurrency - http_workers)
@@ -156,6 +192,7 @@ def run_test(http_url, https_url, duration_sec, concurrency, timeout_sec, priori
     print(f"Concurrency   : {concurrency} (HTTP {http_workers}, HTTPS {https_workers})")
     print(f"Request timeout: {timeout_sec}s")
     print(f"Priority mode : {priority_mode}")
+    print(f"Session reuse : {'on' if reuse_session else 'off (connection-close mode)'}")
     print(f"QoS on HTTP   : {'yes' if http_headers else 'no'}")
     print(f"QoS on HTTPS  : {'yes' if https_headers else 'no'}")
 
@@ -172,6 +209,7 @@ def run_test(http_url, https_url, duration_sec, concurrency, timeout_sec, priori
                     http_headers,
                     stop_event,
                     http_stats,
+                    reuse_session,
                 )
             )
         for _ in range(https_workers):
@@ -184,6 +222,7 @@ def run_test(http_url, https_url, duration_sec, concurrency, timeout_sec, priori
                     https_headers,
                     stop_event,
                     https_stats,
+                    reuse_session,
                 )
             )
 
@@ -241,9 +280,25 @@ def main():
     )
     parser.add_argument("--http-url", default=DEFAULT_HTTP_URL, help="HTTP target URL")
     parser.add_argument("--https-url", default=DEFAULT_HTTPS_URL, help="HTTPS target URL")
+    parser.add_argument(
+        "--path",
+        default=DEFAULT_CONGESTION_PATH,
+        help=(
+            "Request path or full URL used by both targets. "
+            "Examples: /show-something, /, /show-something?load=1"
+        ),
+    )
     parser.add_argument("--duration", type=int, default=90, help="Test duration in seconds")
     parser.add_argument("--concurrency", type=int, default=80, help="Total concurrent workers")
     parser.add_argument("--timeout", type=float, default=2.0, help="Per-request timeout in seconds")
+    parser.add_argument(
+        "--reuse-session",
+        action="store_true",
+        help=(
+            "Reuse persistent per-worker sessions (default is disabled so latency under "
+            "congestion is easier to observe for HTTP and HTTPS)."
+        ),
+    )
     parser.add_argument(
         "--priority",
         choices=("none", "http", "https"),
@@ -276,13 +331,17 @@ def main():
     if args.concurrency < 2:
         raise ValueError("--concurrency must be at least 2")
 
+    http_target = build_target_url(args.http_url, args.path)
+    https_target = build_target_url(args.https_url, args.path)
+
     http_result, https_result = run_test(
-        args.http_url,
-        args.https_url,
+        http_target,
+        https_target,
         args.duration,
         args.concurrency,
         args.timeout,
         args.priority,
+        args.reuse_session,
     )
 
     print_summary(http_result, https_result)
