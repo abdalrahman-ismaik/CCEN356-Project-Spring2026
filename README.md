@@ -711,6 +711,14 @@ $env:CCEN356_QOS_HTTPS_DELAY_MS="0"
 python server\secured_server.py
 ```
 
+Optional high-load QoS proof test (run from a Client PC):
+```powershell
+python scripts/congestion_test.py --duration 90 --concurrency 80 --with-qos
+```
+
+Expected: the script stresses both protocols in parallel and writes `data/congestion_results.csv`.
+When QoS and server delay tuning are active, HTTPS average latency should trend lower than HTTP.
+
 If your HTTPS server is running on **8443** instead of **443**, set fallback ports before launch:
 ```powershell
 $env:CCEN356_HTTPS_FALLBACK_PORTS="443,8443"
