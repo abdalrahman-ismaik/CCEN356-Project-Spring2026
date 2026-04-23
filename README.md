@@ -686,9 +686,9 @@ python scripts/dashboard.py
 
 Optional real-time tuning (PowerShell):
 ```powershell
-$env:CCEN356_POLL_INTERVAL_SEC="0.2"
+$env:CCEN356_POLL_INTERVAL_SEC="0.1"
 $env:CCEN356_REQUEST_TIMEOUT_SEC="1.2"
-$env:CCEN356_DASHBOARD_MAX_SAMPLES="360"
+$env:CCEN356_DASHBOARD_MAX_SAMPLES="1000"
 python scripts/dashboard.py
 ```
 
@@ -705,7 +705,7 @@ Optional QoS-priority tuning (set these before starting Step 10 servers):
 ```powershell
 # HTTP server terminal (plain HTTP gets extra delay when QoS mode is ON)
 $env:CCEN356_QOS_HTTP_DELAY_MS="75"
-$env:CCEN356_QOS_HTTP_DELAY_JITTER_MS="10"
+$env:CCEN356_QOS_HTTP_DELAY_JITTER_MS="1"
 python server\http_server.py
 
 # HTTPS server terminal (keep at 0 for priority, or tune if needed)

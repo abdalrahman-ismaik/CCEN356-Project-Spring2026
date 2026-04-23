@@ -8,7 +8,7 @@ Run from a Client PC (not the Server PC):
     python scripts/congestion_test.py
 
 Example:
-    python scripts/congestion_test.py --duration 90 --concurrency 80 --with-qos
+    python scripts/congestion_test.py --duration 90 --concurrency 80 --priority https
 """
 
 import argparse
@@ -29,6 +29,21 @@ DEFAULT_HTTP_URL = os.getenv("CCEN356_HTTP_URL", "http://192.165.20.79")
 DEFAULT_HTTPS_URL = os.getenv("CCEN356_HTTPS_URL", "https://192.165.20.79")
 QOS_HEADER = os.getenv("CCEN356_QOS_MODE_HEADER", "X-CCEN356-QOS-MODE")
 QOS_VALUE = os.getenv("CCEN356_QOS_MODE_VALUE", "on")
+
+
+def qos_headers_for_priority(priority_mode):
+    """Return per-protocol headers based on requested priority direction."""
+    mode = (priority_mode or "none").strip().lower()
+    qos_header = {QOS_HEADER: QOS_VALUE}
+
+    if mode == "https":
+        # Keep legacy behavior: QoS header is sent on both protocols.
+        return qos_header, qos_header
+    if mode == "http":
+        # Apply QoS header only on HTTPS requests so HTTP remains baseline.
+        # If HTTPS server has a non-zero QoS delay configured, this makes HTTP win.
+        return None, qos_header
+    return None, None
 
 
 class ProtocolStats:
@@ -120,12 +135,12 @@ def worker(url, verify_tls, timeout_sec, headers, stop_event, stats):
 
 
 
-def run_test(http_url, https_url, duration_sec, concurrency, timeout_sec, with_qos):
+def run_test(http_url, https_url, duration_sec, concurrency, timeout_sec, priority_mode):
     # Split workers evenly so both protocols are stressed at the same time.
     http_workers = max(1, concurrency // 2)
     https_workers = max(1, concurrency - http_workers)
 
-    headers = {QOS_HEADER: QOS_VALUE} if with_qos else None
+    http_headers, https_headers = qos_headers_for_priority(priority_mode)
 
     http_stats = ProtocolStats("HTTP")
     https_stats = ProtocolStats("HTTPS")
@@ -140,7 +155,9 @@ def run_test(http_url, https_url, duration_sec, concurrency, timeout_sec, with_q
     print(f"Duration      : {duration_sec}s")
     print(f"Concurrency   : {concurrency} (HTTP {http_workers}, HTTPS {https_workers})")
     print(f"Request timeout: {timeout_sec}s")
-    print(f"QoS header    : {'enabled' if with_qos else 'disabled'}")
+    print(f"Priority mode : {priority_mode}")
+    print(f"QoS on HTTP   : {'yes' if http_headers else 'no'}")
+    print(f"QoS on HTTPS  : {'yes' if https_headers else 'no'}")
 
     start_time = time.perf_counter()
 
@@ -152,7 +169,7 @@ def run_test(http_url, https_url, duration_sec, concurrency, timeout_sec, with_q
                     http_url,
                     False,
                     timeout_sec,
-                    headers,
+                    http_headers,
                     stop_event,
                     http_stats,
                 )
@@ -164,7 +181,7 @@ def run_test(http_url, https_url, duration_sec, concurrency, timeout_sec, with_q
                     https_url,
                     False,
                     timeout_sec,
-                    headers,
+                    https_headers,
                     stop_event,
                     https_stats,
                 )
@@ -228,9 +245,19 @@ def main():
     parser.add_argument("--concurrency", type=int, default=80, help="Total concurrent workers")
     parser.add_argument("--timeout", type=float, default=2.0, help="Per-request timeout in seconds")
     parser.add_argument(
+        "--priority",
+        choices=("none", "http", "https"),
+        default="none",
+        help=(
+            "Traffic-priority profile: 'https' sends QoS header on both protocols "
+            "(legacy behavior), 'http' sends QoS header only on HTTPS requests, "
+            "'none' sends no QoS header."
+        ),
+    )
+    parser.add_argument(
         "--with-qos",
         action="store_true",
-        help="Send QoS header (X-CCEN356-QOS-MODE: on) so server-side QoS profile is applied",
+        help="Deprecated alias for --priority https",
     )
     parser.add_argument(
         "--output",
@@ -239,6 +266,12 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.with_qos and args.priority != "none":
+        parser.error("Use either --with-qos or --priority, not both.")
+
+    if args.with_qos:
+        args.priority = "https"
 
     if args.concurrency < 2:
         raise ValueError("--concurrency must be at least 2")
@@ -249,7 +282,7 @@ def main():
         args.duration,
         args.concurrency,
         args.timeout,
-        args.with_qos,
+        args.priority,
     )
 
     print_summary(http_result, https_result)
