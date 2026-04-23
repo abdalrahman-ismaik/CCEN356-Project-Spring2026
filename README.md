@@ -534,21 +534,32 @@ On Client 2, immediately after starting the capture on Client 1:
 python scripts/performance_metrics.py
 ```
 
+Optional tuning:
+```powershell
+python scripts/performance_metrics.py --requests 40 --timeout 8 --interval 0.1
+```
+
 
 This sends 20 HTTP and 20 HTTPS requests to the server and measures timing.
 
 **Expected output (example values):**
 ```
---- HTTP Results ---
-Requests: 20  Errors: 0  Avg: 12.4ms  Min: 9.1ms  Max: 18.3ms
-Throughput: 85.2 kbps  Error rate: 0.0%
+Testing HTTP -> http://192.165.20.79
+  Avg: 12.4 ms | Median: 11.9 ms | P95: 18.8 ms | P99: 21.1 ms
+  Min: 9.1 ms | Max: 18.3 ms | Jitter: 1.7 ms | CV: 14.1%
+  Success: 100.0% | RPS: 4.7 | Throughput: 10.6 KiB/s (86.9 kbps)
 
---- HTTPS Results ---
-Requests: 20  Errors: 0  Avg: 31.7ms  Min: 24.5ms  Max: 45.2ms
-Throughput: 62.1 kbps  Error rate: 0.0%
+Testing HTTPS -> https://192.165.20.79
+  Avg: 31.7 ms | Median: 30.9 ms | P95: 44.3 ms | P99: 48.2 ms
+  Min: 24.5 ms | Max: 45.2 ms | Jitter: 3.9 ms | CV: 12.3%
+  Success: 100.0% | RPS: 4.6 | Throughput: 7.8 KiB/s (63.9 kbps)
 
 Saved to data/performance_results.csv
 ```
+`data/performance_results.csv` now includes expanded fields such as
+`median_ms`, `p90_ms`, `p95_ms`, `p99_ms`, `jitter_ms`, `latency_cv_%`,
+status-code buckets, request rates, and throughput variants.
+
 HTTPS average should be noticeably higher than HTTP due to the TLS handshake overhead. If error count is > 0, re-check that both servers are still running (Step 10).
 
 ---
@@ -708,7 +719,10 @@ $env:CCEN356_QOS_HTTP_DELAY_MS="75"
 $env:CCEN356_QOS_HTTP_DELAY_JITTER_MS="1"
 python server\http_server.py
 
-# HTTPS server terminal (keep at 0 for priority, or tune if needed)
+# HTTPS server terminal
+# Baseline/no-QoS HTTPS queue delay simulation + QoS relief so HTTPS can drop in QoS mode.
+$env:CCEN356_HTTPS_BASE_DELAY_MS="20"
+$env:CCEN356_QOS_HTTPS_RELIEF_MS="15"
 $env:CCEN356_QOS_HTTPS_DELAY_MS="0"
 python server\secured_server.py
 ```
@@ -716,9 +730,13 @@ python server\secured_server.py
 For a stronger QoS demonstration where HTTPS clearly becomes faster, increase
 `CCEN356_QOS_HTTP_DELAY_MS` into the `90-120` range.
 
+If you want QoS to improve HTTPS by lowering its own latency (not only by raising
+HTTP latency), increase `CCEN356_QOS_HTTPS_RELIEF_MS` or decrease
+`CCEN356_HTTPS_BASE_DELAY_MS`.
+
 Optional high-load QoS proof test (run from a Client PC):
 ```powershell
-python scripts/congestion_test.py --duration 90 --concurrency 80 --with-qos
+python scripts/congestion_test.py --duration 90 --concurrency 80 --priority https --path /show-something
 ```
 
 Expected: the script stresses both protocols in parallel and writes `data/congestion_results.csv`.
