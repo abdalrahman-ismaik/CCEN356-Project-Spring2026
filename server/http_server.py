@@ -13,6 +13,7 @@ import logging
 from logging.handlers import QueueHandler, QueueListener
 import os
 from queue import SimpleQueue
+import random
 import time
 
 
@@ -38,7 +39,8 @@ logger = _configure_async_logger('http_server.log', 'http_server')
 
 QOS_MODE_HEADER = os.getenv("CCEN356_QOS_MODE_HEADER", "X-CCEN356-QOS-MODE")
 QOS_MODE_VALUE = os.getenv("CCEN356_QOS_MODE_VALUE", "on").strip().lower()
-QOS_HTTP_DELAY_MS = max(0.0, float(os.getenv("CCEN356_QOS_HTTP_DELAY_MS", "25")))
+QOS_HTTP_DELAY_MS = max(0.0, float(os.getenv("CCEN356_QOS_HTTP_DELAY_MS", "75")))
+QOS_HTTP_DELAY_JITTER_MS = max(0.0, float(os.getenv("CCEN356_QOS_HTTP_DELAY_JITTER_MS", "10")))
 
 app = Flask(
     __name__,
@@ -50,21 +52,32 @@ def _is_qos_mode_enabled(req):
     return req.headers.get(QOS_MODE_HEADER, "").strip().lower() == QOS_MODE_VALUE
 
 
+def _calculate_qos_delay_ms(req):
+    if not _is_qos_mode_enabled(req) or QOS_HTTP_DELAY_MS <= 0:
+        return 0.0
+    jitter = random.uniform(0.0, QOS_HTTP_DELAY_JITTER_MS) if QOS_HTTP_DELAY_JITTER_MS > 0 else 0.0
+    return QOS_HTTP_DELAY_MS + jitter
+
+
 @app.before_request
 def apply_qos_profile():
     # In QoS mode we intentionally add small HTTP processing delay to simulate
     # lower-priority handling for plain HTTP relative to HTTPS.
-    if _is_qos_mode_enabled(request) and QOS_HTTP_DELAY_MS > 0:
-        time.sleep(QOS_HTTP_DELAY_MS / 1000.0)
+    delay_ms = _calculate_qos_delay_ms(request)
+    request.environ["ccen356_http_qos_delay_ms"] = delay_ms
+    if delay_ms > 0:
+        time.sleep(delay_ms / 1000.0)
 
 
 @app.after_request
 def log_request(response):
     qos_mode = "on" if _is_qos_mode_enabled(request) else "off"
+    delay_ms = float(request.environ.get("ccen356_http_qos_delay_ms", 0.0))
     response.headers[QOS_MODE_HEADER] = qos_mode
+    response.headers["X-CCEN356-QOS-HTTP-Delay-Ms"] = f"{delay_ms:.2f}"
     logger.info(
         f"Request from {request.remote_addr}: {request.method} {request.path} "
-        f"— {response.status_code} (qos={qos_mode})"
+        f"— {response.status_code} (qos={qos_mode}, delay_ms={delay_ms:.2f})"
     )
     return response
 
@@ -81,5 +94,8 @@ def show():
 
 if __name__ == '__main__':
     print("HTTP server starting on http://0.0.0.0:80")
-    print(f"QoS mode header: {QOS_MODE_HEADER}={QOS_MODE_VALUE} | HTTP delay: {QOS_HTTP_DELAY_MS}ms")
+    print(
+        f"QoS mode header: {QOS_MODE_HEADER}={QOS_MODE_VALUE} | "
+        f"HTTP delay: {QOS_HTTP_DELAY_MS}ms + jitter(0-{QOS_HTTP_DELAY_JITTER_MS}ms)"
+    )
     app.run(host='0.0.0.0', port=80, debug=False, threaded=True, use_reloader=False)

@@ -421,7 +421,8 @@ Open **two separate PowerShell terminals** on the Server PC and run one command 
 
 **Terminal 1 — HTTP server (run as Administrator for port 80):**
 ```powershell
-set CCEN356_QOS_HTTP_DELAY_MS=25
+set CCEN356_QOS_HTTP_DELAY_MS=75
+set CCEN356_QOS_HTTP_DELAY_JITTER_MS=10
 python server\http_server.py
 ```
 
@@ -703,13 +704,17 @@ python scripts/dashboard.py
 Optional QoS-priority tuning (set these before starting Step 10 servers):
 ```powershell
 # HTTP server terminal (plain HTTP gets extra delay when QoS mode is ON)
-$env:CCEN356_QOS_HTTP_DELAY_MS="25"
+$env:CCEN356_QOS_HTTP_DELAY_MS="75"
+$env:CCEN356_QOS_HTTP_DELAY_JITTER_MS="10"
 python server\http_server.py
 
 # HTTPS server terminal (keep at 0 for priority, or tune if needed)
 $env:CCEN356_QOS_HTTPS_DELAY_MS="0"
 python server\secured_server.py
 ```
+
+For a stronger QoS demonstration where HTTPS clearly becomes faster, increase
+`CCEN356_QOS_HTTP_DELAY_MS` into the `90-120` range.
 
 Optional high-load QoS proof test (run from a Client PC):
 ```powershell
