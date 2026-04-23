@@ -16,7 +16,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-def measure_request(url, protocol_label, num_requests=1000):
+def measure_request(url, protocol_label, num_requests=100):
     """Send multiple GET requests and collect performance metrics."""
     response_times = []
     errors = 0
