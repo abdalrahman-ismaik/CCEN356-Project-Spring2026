@@ -708,7 +708,10 @@ $env:CCEN356_QOS_HTTP_DELAY_MS="75"
 $env:CCEN356_QOS_HTTP_DELAY_JITTER_MS="1"
 python server\http_server.py
 
-# HTTPS server terminal (keep at 0 for priority, or tune if needed)
+# HTTPS server terminal
+# Baseline/no-QoS HTTPS queue delay simulation + QoS relief so HTTPS can drop in QoS mode.
+$env:CCEN356_HTTPS_BASE_DELAY_MS="20"
+$env:CCEN356_QOS_HTTPS_RELIEF_MS="15"
 $env:CCEN356_QOS_HTTPS_DELAY_MS="0"
 python server\secured_server.py
 ```
@@ -716,9 +719,13 @@ python server\secured_server.py
 For a stronger QoS demonstration where HTTPS clearly becomes faster, increase
 `CCEN356_QOS_HTTP_DELAY_MS` into the `90-120` range.
 
+If you want QoS to improve HTTPS by lowering its own latency (not only by raising
+HTTP latency), increase `CCEN356_QOS_HTTPS_RELIEF_MS` or decrease
+`CCEN356_HTTPS_BASE_DELAY_MS`.
+
 Optional high-load QoS proof test (run from a Client PC):
 ```powershell
-python scripts/congestion_test.py --duration 90 --concurrency 80 --with-qos
+python scripts/congestion_test.py --duration 90 --concurrency 80 --priority https --path /show-something
 ```
 
 Expected: the script stresses both protocols in parallel and writes `data/congestion_results.csv`.
