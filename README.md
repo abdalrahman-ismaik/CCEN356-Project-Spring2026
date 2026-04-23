@@ -687,7 +687,7 @@ python scripts/dashboard.py
 Optional real-time tuning (PowerShell):
 ```powershell
 $env:CCEN356_POLL_INTERVAL_SEC="0.1"
-$env:CCEN356_REQUEST_TIMEOUT_SEC="1.2"
+$env:CCEN356_REQUEST_TIMEOUT_SEC="2.5"
 $env:CCEN356_DASHBOARD_MAX_SAMPLES="1000"
 python scripts/dashboard.py
 ```
