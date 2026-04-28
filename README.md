@@ -38,7 +38,9 @@ Compare HTTP vs HTTPS performance using physical Cisco networking equipment, Pyt
 │   ├── capture_traffic.py        # Scapy packet capture
 │   ├── performance_metrics.py    # HTTP vs HTTPS benchmarking
 │   ├── visualize_traffic.py      # Matplotlib charts
-│   └── dashboard.py              # Flask live dashboard
+│   ├── dashboard.py              # Flask live dashboard
+│   ├── congestion_test.py        # Parallel load generator
+│   └── qos_ab_compare.py         # Isolated QoS A/B comparison
 ├── server/
 │   ├── http_server.py            # Flask HTTP (port 80)
 │   ├── secured_server.py         # Flask HTTPS (port 443)
@@ -734,13 +736,19 @@ If you want QoS to improve HTTPS by lowering its own latency (not only by raisin
 HTTP latency), increase `CCEN356_QOS_HTTPS_RELIEF_MS` or decrease
 `CCEN356_HTTPS_BASE_DELAY_MS`.
 
-Optional high-load QoS proof test (run from a Client PC):
+Optional isolated QoS A/B proof test (run from a Client PC):
 ```powershell
-python scripts/congestion_test.py --duration 90 --concurrency 80 --priority https --path /show-something
+python scripts/qos_ab_compare.py --packets 200
 ```
 
-Expected: the script stresses both protocols in parallel and writes `data/congestion_results.csv`.
-When QoS and server delay tuning are active, HTTPS average latency should trend lower than HTTP.
+Expected outputs:
+- `data/qos_ab_metrics.csv`
+- `data/qos_ab_isolated_packets.csv` (when capture is available)
+- `data/qos_ab_packet_summary.csv` (when capture is available)
+- `charts/qos_ab_comparison.png`
+
+The script runs two phases (`without_qos` then `with_qos`) and reports deltas; with QoS tuning active,
+HTTPS latency should trend lower than HTTP in the `with_qos` phase.
 
 If your HTTPS server is running on **8443** instead of **443**, set fallback ports before launch:
 ```powershell
@@ -785,6 +793,27 @@ ssh -o "KexAlgorithms=+diffie-hellman-group14-sha1" -o "HostKeyAlgorithms=+ssh-r
 show running-config
 ```
 Paste into `configs/R2_config.txt`.
+
+If SSH to `192.165.20.37` times out but ping works, your R1 WAN ACL is likely
+allowing web traffic only. Add temporary SSH management permits on R1:
+
+```text
+conf t
+ip access-list extended HTTP_HTTPS_ONLY
+ 5 permit tcp any host 192.165.20.37 eq 22
+ 6 permit tcp host 192.165.20.37 eq 22 any established
+end
+write memory
+show access-lists HTTP_HTTPS_ONLY
+```
+
+Then retry SSH to R2. If it still fails, verify SSH is enabled on R2:
+
+```text
+show ip ssh
+show ip interface brief
+show running-config | section line vty|username|ip ssh
+```
 
 **Expected:** Both files contain the full `show running-config` output including interface IPs, route statements, ACL, and QoS policy (R1 only). Verify ACL hit counters are non-zero:
 ```

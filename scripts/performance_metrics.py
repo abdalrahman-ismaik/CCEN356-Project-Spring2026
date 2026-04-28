@@ -45,6 +45,7 @@ def average_jitter(values):
 
 
 def measure_request(url, protocol_label, num_requests=200, timeout_sec=10, interval_sec=0.2):
+def measure_request(url, protocol_label, num_requests=200, timeout_sec=10, interval_sec=0.2):
     """Send multiple GET requests and collect performance metrics."""
     response_times = []
     errors = 0
@@ -190,9 +191,9 @@ def run_comparison(num_requests=200, timeout_sec=10, interval_sec=0.2):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="HTTP vs HTTPS benchmark with extended metrics")
-    parser.add_argument("--requests", type=int, default=200, help="Requests per protocol")
+    parser.add_argument("--requests", type=int, default=20, help="Requests per protocol")
     parser.add_argument("--timeout", type=float, default=10.0, help="Request timeout in seconds")
-    parser.add_argument("--interval", type=float, default=0.2, help="Delay between requests in seconds")
+    parser.add_argument("--interval", type=float, default=0.1, help="Delay between requests in seconds")
     args = parser.parse_args()
 
     run_comparison(num_requests=args.requests, timeout_sec=args.timeout, interval_sec=args.interval)
