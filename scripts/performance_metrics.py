@@ -1,7 +1,7 @@
 """
 Script 3 — HTTP vs HTTPS Performance Benchmark
 
-Sends 20 requests to both HTTP and HTTPS endpoints, measures latency and throughput.
+Sends 200 requests to both HTTP and HTTPS endpoints, measures latency and throughput.
 Run from Client PC:
     python3 performance_metrics.py
 """
@@ -44,7 +44,7 @@ def average_jitter(values):
     return float(sum(deltas) / len(deltas)) if deltas else 0.0
 
 
-def measure_request(url, protocol_label, num_requests=20, timeout_sec=10, interval_sec=0.2):
+def measure_request(url, protocol_label, num_requests=200, timeout_sec=10, interval_sec=0.2):
     """Send multiple GET requests and collect performance metrics."""
     response_times = []
     errors = 0
@@ -157,7 +157,7 @@ def measure_request(url, protocol_label, num_requests=20, timeout_sec=10, interv
     return None
 
 
-def run_comparison(num_requests=20, timeout_sec=10, interval_sec=0.2):
+def run_comparison(num_requests=200, timeout_sec=10, interval_sec=0.2):
     """Run HTTP vs HTTPS comparison and save results to CSV."""
     targets = [
         ("http://192.165.20.79", "HTTP"),
@@ -190,7 +190,7 @@ def run_comparison(num_requests=20, timeout_sec=10, interval_sec=0.2):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="HTTP vs HTTPS benchmark with extended metrics")
-    parser.add_argument("--requests", type=int, default=20, help="Requests per protocol")
+    parser.add_argument("--requests", type=int, default=200, help="Requests per protocol")
     parser.add_argument("--timeout", type=float, default=10.0, help="Request timeout in seconds")
     parser.add_argument("--interval", type=float, default=0.2, help="Delay between requests in seconds")
     args = parser.parse_args()
