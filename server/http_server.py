@@ -1,0 +1,105 @@
+"""
+HTTP Server - plain HTTP on port 80 for performance comparison.
+
+Run on Server PC (Windows, 192.165.20.79):
+    python http_server.py
+
+Note: On Windows, run as Administrator to bind to port 80.
+"""
+
+from flask import Flask, render_template, request
+import atexit
+import logging
+from logging.handlers import QueueHandler, QueueListener
+import os
+from queue import SimpleQueue
+import random
+import time
+
+
+def _configure_async_logger(log_filename, logger_name):
+    """Write logs through a queue so request threads are not blocked by disk I/O."""
+    log_queue = SimpleQueue()
+    file_handler = logging.FileHandler(log_filename)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+    listener = QueueListener(log_queue, file_handler)
+    listener.start()
+    atexit.register(listener.stop)
+
+    configured_logger = logging.getLogger(logger_name)
+    configured_logger.setLevel(logging.INFO)
+    configured_logger.handlers.clear()
+    configured_logger.addHandler(QueueHandler(log_queue))
+    configured_logger.propagate = False
+    return configured_logger
+
+
+HTTP_HOST = os.getenv("CCEN356_HTTP_HOST", "0.0.0.0")
+HTTP_PORT = int(os.getenv("CCEN356_HTTP_PORT", "80"))
+HTTP_LOG_FILE = os.getenv("CCEN356_HTTP_LOG_FILE", "http_server.log")
+
+logger = _configure_async_logger(HTTP_LOG_FILE, 'http_server')
+
+QOS_MODE_HEADER = os.getenv("CCEN356_QOS_MODE_HEADER", "X-CCEN356-QOS-MODE")
+QOS_MODE_VALUE = os.getenv("CCEN356_QOS_MODE_VALUE", "on").strip().lower()
+QOS_HTTP_DELAY_MS = max(0.0, float(os.getenv("CCEN356_QOS_HTTP_DELAY_MS", "75")))
+QOS_HTTP_DELAY_JITTER_MS = max(0.0, float(os.getenv("CCEN356_QOS_HTTP_DELAY_JITTER_MS", "10")))
+
+app = Flask(
+    __name__,
+    template_folder=os.path.join(os.path.dirname(__file__), 'templates')
+)
+
+
+def _is_qos_mode_enabled(req):
+    return req.headers.get(QOS_MODE_HEADER, "").strip().lower() == QOS_MODE_VALUE
+
+
+def _calculate_qos_delay_ms(req):
+    if not _is_qos_mode_enabled(req) or QOS_HTTP_DELAY_MS <= 0:
+        return 0.0
+    jitter = random.uniform(0.0, QOS_HTTP_DELAY_JITTER_MS) if QOS_HTTP_DELAY_JITTER_MS > 0 else 0.0
+    return QOS_HTTP_DELAY_MS + jitter
+
+
+@app.before_request
+def apply_qos_profile():
+    # In QoS mode we intentionally add small HTTP processing delay to simulate
+    # lower-priority handling for plain HTTP relative to HTTPS.
+    delay_ms = _calculate_qos_delay_ms(request)
+    request.environ["ccen356_http_qos_delay_ms"] = delay_ms
+    if delay_ms > 0:
+        time.sleep(delay_ms / 1000.0)
+
+
+@app.after_request
+def log_request(response):
+    qos_mode = "on" if _is_qos_mode_enabled(request) else "off"
+    delay_ms = float(request.environ.get("ccen356_http_qos_delay_ms", 0.0))
+    response.headers[QOS_MODE_HEADER] = qos_mode
+    response.headers["X-CCEN356-QOS-HTTP-Delay-Ms"] = f"{delay_ms:.2f}"
+    logger.info(
+        f"Request from {request.remote_addr}: {request.method} {request.path} "
+        f"- {response.status_code} (qos={qos_mode}, delay_ms={delay_ms:.2f})"
+    )
+    return response
+
+
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+
+@app.route('/show-something')
+def show():
+    return render_template('show.html')
+
+
+if __name__ == '__main__':
+    print(f"HTTP server starting on http://{HTTP_HOST}:{HTTP_PORT}")
+    print(
+        f"QoS mode header: {QOS_MODE_HEADER}={QOS_MODE_VALUE} | "
+        f"HTTP delay: {QOS_HTTP_DELAY_MS}ms + jitter(0-{QOS_HTTP_DELAY_JITTER_MS}ms)"
+    )
+    app.run(host=HTTP_HOST, port=HTTP_PORT, debug=False, threaded=True, use_reloader=False)

@@ -1,0 +1,160 @@
+"""
+Secured HTTPS Server - Flask HTTPS on port 443 with security headers.
+
+Generate certificates first (Git Bash, WSL, or OpenSSL for Windows):
+    openssl req -x509 -newkey rsa:2048 -sha256 -days 365 -nodes \
+      -keyout server/key.pem -out server/cert.pem \
+      -subj "/CN=192.165.20.79/O=CCEN356Lab" \
+      -addext "subjectAltName=IP:192.165.20.79"
+
+Run on Server PC (Windows, 192.165.20.79):
+    python secured_server.py
+"""
+
+from flask import Flask, render_template, request, abort
+import atexit
+import logging
+from logging.handlers import QueueHandler, QueueListener
+import os
+from queue import SimpleQueue
+import time
+
+
+def _configure_async_logger(log_filename, logger_name):
+    """Write logs through a queue so request threads are not blocked by disk I/O."""
+    log_queue = SimpleQueue()
+    file_handler = logging.FileHandler(log_filename)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+    listener = QueueListener(log_queue, file_handler)
+    listener.start()
+    atexit.register(listener.stop)
+
+    configured_logger = logging.getLogger(logger_name)
+    configured_logger.setLevel(logging.INFO)
+    configured_logger.handlers.clear()
+    configured_logger.addHandler(QueueHandler(log_queue))
+    configured_logger.propagate = False
+    return configured_logger
+
+
+HTTPS_HOST = os.getenv("CCEN356_HTTPS_HOST", "0.0.0.0")
+HTTPS_PORT = int(os.getenv("CCEN356_HTTPS_PORT", "443"))
+HTTPS_LOG_FILE = os.getenv("CCEN356_HTTPS_LOG_FILE", "server.log")
+
+logger = _configure_async_logger(HTTPS_LOG_FILE, 'secured_server')
+
+QOS_MODE_HEADER = os.getenv("CCEN356_QOS_MODE_HEADER", "X-CCEN356-QOS-MODE")
+QOS_MODE_VALUE = os.getenv("CCEN356_QOS_MODE_VALUE", "on").strip().lower()
+HTTPS_BASE_DELAY_MS = max(0.0, float(os.getenv("CCEN356_HTTPS_BASE_DELAY_MS", "0")))
+QOS_HTTPS_RELIEF_MS = max(0.0, float(os.getenv("CCEN356_QOS_HTTPS_RELIEF_MS", "0")))
+QOS_HTTPS_DELAY_MS = max(0.0, float(os.getenv("CCEN356_QOS_HTTPS_DELAY_MS", "0")))
+
+app = Flask(
+    __name__,
+    template_folder=os.path.join(os.path.dirname(__file__), 'templates')
+)
+
+
+def _is_qos_mode_enabled(req):
+    return req.headers.get(QOS_MODE_HEADER, "").strip().lower() == QOS_MODE_VALUE
+
+
+def _calculate_https_delay_ms(req):
+    """Compute effective HTTPS service delay.
+
+    Base delay can represent queueing under load; QoS mode can remove part of that
+    delay via relief, then apply any explicit QoS-mode delay.
+    """
+    delay_ms = HTTPS_BASE_DELAY_MS
+    if _is_qos_mode_enabled(req):
+        delay_ms = max(0.0, delay_ms - QOS_HTTPS_RELIEF_MS)
+        delay_ms += QOS_HTTPS_DELAY_MS
+    return delay_ms
+
+
+@app.before_request
+def validate_path():
+    if '..' in request.path:
+        logger.warning(f"Directory traversal attempt from {request.remote_addr}: {request.path}")
+        abort(403)
+    delay_ms = _calculate_https_delay_ms(request)
+    request.environ["ccen356_https_qos_delay_ms"] = delay_ms
+    if delay_ms > 0:
+        time.sleep(delay_ms / 1000.0)
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Content-Security-Policy'] = "default-src 'self'"
+    qos_mode = "on" if _is_qos_mode_enabled(request) else "off"
+    delay_ms = float(request.environ.get("ccen356_https_qos_delay_ms", 0.0))
+    response.headers[QOS_MODE_HEADER] = qos_mode
+    response.headers["X-CCEN356-QOS-HTTPS-Delay-Ms"] = f"{delay_ms:.2f}"
+    logger.info(
+        f"Request from {request.remote_addr}: {request.method} {request.path} "
+        f"- {response.status_code} (qos={qos_mode}, delay_ms={delay_ms:.2f})"
+    )
+    return response
+
+
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+
+@app.route('/show-something')
+def show():
+    return render_template('show.html')
+
+
+@app.errorhandler(403)
+def forbidden(e):
+    return "<h1>403 Forbidden</h1><p>Access denied.</p>", 403
+
+
+@app.errorhandler(404)
+def not_found(e):
+    return "<h1>404 Not Found</h1><p>The requested page does not exist.</p>", 404
+
+
+@app.errorhandler(500)
+def internal_error(e):
+    return "<h1>500 Internal Server Error</h1><p>Something went wrong.</p>", 500
+
+
+if __name__ == '__main__':
+    cert_path = os.getenv("CCEN356_TLS_CERT_FILE", os.path.join(os.path.dirname(__file__), 'cert.pem'))
+    key_path = os.getenv("CCEN356_TLS_KEY_FILE", os.path.join(os.path.dirname(__file__), 'key.pem'))
+
+    if not os.path.exists(cert_path) or not os.path.exists(key_path):
+        print("ERROR: TLS certificate and key were not found.")
+        print(f"Current cert path: {cert_path}")
+        print(f"Current key path : {key_path}")
+        print("Generate them with:")
+        print("  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \\")
+        print("    -keyout server/key.pem -out server/cert.pem \\")
+        print('    -subj "/CN=192.165.20.79/O=CCEN356Lab" \\')
+        print('    -addext "subjectAltName=IP:192.165.20.79"')
+        print("Or set CCEN356_TLS_CERT_FILE and CCEN356_TLS_KEY_FILE.")
+        exit(1)
+
+    print(f"HTTPS server starting on https://{HTTPS_HOST}:{HTTPS_PORT}")
+    print(
+        f"QoS mode header: {QOS_MODE_HEADER}={QOS_MODE_VALUE} | "
+        f"HTTPS base delay: {HTTPS_BASE_DELAY_MS}ms | "
+        f"QoS relief: {QOS_HTTPS_RELIEF_MS}ms | "
+        f"QoS-mode additive delay: {QOS_HTTPS_DELAY_MS}ms"
+    )
+    app.run(
+        host=HTTPS_HOST,
+        port=HTTPS_PORT,
+        ssl_context=(cert_path, key_path),
+        debug=False,
+        threaded=True,
+        use_reloader=False,
+    )
