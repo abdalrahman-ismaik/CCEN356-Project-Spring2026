@@ -1,10 +1,11 @@
 """
-Secured HTTPS Server — Flask HTTPS on port 443 with security headers.
+Secured HTTPS Server - Flask HTTPS on port 443 with security headers.
 
 Generate certificates first (Git Bash, WSL, or OpenSSL for Windows):
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 ^
-      -keyout server\key.pem -out server\cert.pem ^
-      -subj "/CN=192.165.20.79/O=CCEN356Lab"
+    openssl req -x509 -newkey rsa:2048 -sha256 -days 365 -nodes \
+      -keyout server/key.pem -out server/cert.pem \
+      -subj "/CN=192.165.20.79/O=CCEN356Lab" \
+      -addext "subjectAltName=IP:192.165.20.79"
 
 Run on Server PC (Windows, 192.165.20.79):
     python secured_server.py
@@ -37,7 +38,11 @@ def _configure_async_logger(log_filename, logger_name):
     return configured_logger
 
 
-logger = _configure_async_logger('server.log', 'secured_server')
+HTTPS_HOST = os.getenv("CCEN356_HTTPS_HOST", "0.0.0.0")
+HTTPS_PORT = int(os.getenv("CCEN356_HTTPS_PORT", "443"))
+HTTPS_LOG_FILE = os.getenv("CCEN356_HTTPS_LOG_FILE", "server.log")
+
+logger = _configure_async_logger(HTTPS_LOG_FILE, 'secured_server')
 
 QOS_MODE_HEADER = os.getenv("CCEN356_QOS_MODE_HEADER", "X-CCEN356-QOS-MODE")
 QOS_MODE_VALUE = os.getenv("CCEN356_QOS_MODE_VALUE", "on").strip().lower()
@@ -92,7 +97,7 @@ def add_security_headers(response):
     response.headers["X-CCEN356-QOS-HTTPS-Delay-Ms"] = f"{delay_ms:.2f}"
     logger.info(
         f"Request from {request.remote_addr}: {request.method} {request.path} "
-        f"— {response.status_code} (qos={qos_mode}, delay_ms={delay_ms:.2f})"
+        f"- {response.status_code} (qos={qos_mode}, delay_ms={delay_ms:.2f})"
     )
     return response
 
@@ -123,18 +128,22 @@ def internal_error(e):
 
 
 if __name__ == '__main__':
-    cert_path = os.path.join(os.path.dirname(__file__), 'cert.pem')
-    key_path = os.path.join(os.path.dirname(__file__), 'key.pem')
+    cert_path = os.getenv("CCEN356_TLS_CERT_FILE", os.path.join(os.path.dirname(__file__), 'cert.pem'))
+    key_path = os.getenv("CCEN356_TLS_KEY_FILE", os.path.join(os.path.dirname(__file__), 'key.pem'))
 
     if not os.path.exists(cert_path) or not os.path.exists(key_path):
-        print("ERROR: cert.pem and key.pem not found in server/ directory.")
+        print("ERROR: TLS certificate and key were not found.")
+        print(f"Current cert path: {cert_path}")
+        print(f"Current key path : {key_path}")
         print("Generate them with:")
         print("  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \\")
         print("    -keyout server/key.pem -out server/cert.pem \\")
-        print('    -subj "/CN=192.165.20.79/O=CCEN356Lab"')
+        print('    -subj "/CN=192.165.20.79/O=CCEN356Lab" \\')
+        print('    -addext "subjectAltName=IP:192.165.20.79"')
+        print("Or set CCEN356_TLS_CERT_FILE and CCEN356_TLS_KEY_FILE.")
         exit(1)
 
-    print("HTTPS server starting on https://0.0.0.0:443")
+    print(f"HTTPS server starting on https://{HTTPS_HOST}:{HTTPS_PORT}")
     print(
         f"QoS mode header: {QOS_MODE_HEADER}={QOS_MODE_VALUE} | "
         f"HTTPS base delay: {HTTPS_BASE_DELAY_MS}ms | "
@@ -142,8 +151,8 @@ if __name__ == '__main__':
         f"QoS-mode additive delay: {QOS_HTTPS_DELAY_MS}ms"
     )
     app.run(
-        host='0.0.0.0',
-        port=443,
+        host=HTTPS_HOST,
+        port=HTTPS_PORT,
         ssl_context=(cert_path, key_path),
         debug=False,
         threaded=True,

@@ -1,5 +1,5 @@
 """
-HTTP Server — Plain HTTP on port 80 for performance comparison.
+HTTP Server - plain HTTP on port 80 for performance comparison.
 
 Run on Server PC (Windows, 192.165.20.79):
     python http_server.py
@@ -35,7 +35,11 @@ def _configure_async_logger(log_filename, logger_name):
     return configured_logger
 
 
-logger = _configure_async_logger('http_server.log', 'http_server')
+HTTP_HOST = os.getenv("CCEN356_HTTP_HOST", "0.0.0.0")
+HTTP_PORT = int(os.getenv("CCEN356_HTTP_PORT", "80"))
+HTTP_LOG_FILE = os.getenv("CCEN356_HTTP_LOG_FILE", "http_server.log")
+
+logger = _configure_async_logger(HTTP_LOG_FILE, 'http_server')
 
 QOS_MODE_HEADER = os.getenv("CCEN356_QOS_MODE_HEADER", "X-CCEN356-QOS-MODE")
 QOS_MODE_VALUE = os.getenv("CCEN356_QOS_MODE_VALUE", "on").strip().lower()
@@ -77,7 +81,7 @@ def log_request(response):
     response.headers["X-CCEN356-QOS-HTTP-Delay-Ms"] = f"{delay_ms:.2f}"
     logger.info(
         f"Request from {request.remote_addr}: {request.method} {request.path} "
-        f"— {response.status_code} (qos={qos_mode}, delay_ms={delay_ms:.2f})"
+        f"- {response.status_code} (qos={qos_mode}, delay_ms={delay_ms:.2f})"
     )
     return response
 
@@ -93,9 +97,9 @@ def show():
 
 
 if __name__ == '__main__':
-    print("HTTP server starting on http://0.0.0.0:80")
+    print(f"HTTP server starting on http://{HTTP_HOST}:{HTTP_PORT}")
     print(
         f"QoS mode header: {QOS_MODE_HEADER}={QOS_MODE_VALUE} | "
         f"HTTP delay: {QOS_HTTP_DELAY_MS}ms + jitter(0-{QOS_HTTP_DELAY_JITTER_MS}ms)"
     )
-    app.run(host='0.0.0.0', port=80, debug=False, threaded=True, use_reloader=False)
+    app.run(host=HTTP_HOST, port=HTTP_PORT, debug=False, threaded=True, use_reloader=False)

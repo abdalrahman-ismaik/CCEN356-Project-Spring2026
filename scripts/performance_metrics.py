@@ -1,9 +1,8 @@
 """
-Script 3 — HTTP vs HTTPS Performance Benchmark
+Script 3 - HTTP vs HTTPS Performance Benchmark.
 
-Sends 200 requests to both HTTP and HTTPS endpoints, measures latency and throughput.
-Run from Client PC:
-    python3 performance_metrics.py
+Sends requests to both HTTP and HTTPS endpoints, then measures latency and
+throughput. Target URLs can be supplied by CLI arguments or environment variables.
 """
 
 import argparse
@@ -15,6 +14,14 @@ import os
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+DEFAULT_SERVER_HOST = os.getenv("CCEN356_SERVER_HOST", "192.165.20.79")
+DEFAULT_HTTP_URL = os.getenv("CCEN356_HTTP_URL", f"http://{DEFAULT_SERVER_HOST}")
+DEFAULT_HTTPS_URL = os.getenv("CCEN356_HTTPS_URL", f"https://{DEFAULT_SERVER_HOST}")
+DEFAULT_REQUESTS = int(os.getenv("CCEN356_REQUESTS_PER_PROTOCOL", "50"))
+DEFAULT_TIMEOUT_SEC = float(os.getenv("CCEN356_BENCHMARK_TIMEOUT_SEC", "10"))
+DEFAULT_INTERVAL_SEC = float(os.getenv("CCEN356_BENCHMARK_INTERVAL_SEC", "0.1"))
+DEFAULT_VERIFY_TLS = os.getenv("CCEN356_VERIFY_TLS", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def percentile(values, p):
@@ -44,8 +51,7 @@ def average_jitter(values):
     return float(sum(deltas) / len(deltas)) if deltas else 0.0
 
 
-def measure_request(url, protocol_label, num_requests=200, timeout_sec=10, interval_sec=0.2):
-def measure_request(url, protocol_label, num_requests=200, timeout_sec=10, interval_sec=0.2):
+def measure_request(url, protocol_label, num_requests=50, timeout_sec=10, interval_sec=0.2, verify_tls=False):
     """Send multiple GET requests and collect performance metrics."""
     response_times = []
     errors = 0
@@ -62,7 +68,7 @@ def measure_request(url, protocol_label, num_requests=200, timeout_sec=10, inter
     for i in range(num_requests):
         try:
             start = time.perf_counter()
-            response = requests.get(url, timeout=timeout_sec, verify=False)
+            response = requests.get(url, timeout=timeout_sec, verify=verify_tls)
             elapsed = (time.perf_counter() - start) * 1000  # ms
 
             response_times.append(elapsed)
@@ -158,11 +164,18 @@ def measure_request(url, protocol_label, num_requests=200, timeout_sec=10, inter
     return None
 
 
-def run_comparison(num_requests=200, timeout_sec=10, interval_sec=0.2):
+def run_comparison(
+    num_requests=50,
+    timeout_sec=10,
+    interval_sec=0.2,
+    http_url=DEFAULT_HTTP_URL,
+    https_url=DEFAULT_HTTPS_URL,
+    verify_tls=DEFAULT_VERIFY_TLS,
+):
     """Run HTTP vs HTTPS comparison and save results to CSV."""
     targets = [
-        ("http://192.165.20.79", "HTTP"),
-        ("https://192.165.20.79", "HTTPS"),
+        (http_url, "HTTP"),
+        (https_url, "HTTPS"),
     ]
 
     all_metrics = []
@@ -173,6 +186,7 @@ def run_comparison(num_requests=200, timeout_sec=10, interval_sec=0.2):
             num_requests=num_requests,
             timeout_sec=timeout_sec,
             interval_sec=interval_sec,
+            verify_tls=verify_tls,
         )
         if result:
             all_metrics.append(result)
@@ -191,9 +205,24 @@ def run_comparison(num_requests=200, timeout_sec=10, interval_sec=0.2):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="HTTP vs HTTPS benchmark with extended metrics")
-    parser.add_argument("--requests", type=int, default=20, help="Requests per protocol")
-    parser.add_argument("--timeout", type=float, default=10.0, help="Request timeout in seconds")
-    parser.add_argument("--interval", type=float, default=0.1, help="Delay between requests in seconds")
+    parser.add_argument("--http-url", default=DEFAULT_HTTP_URL, help="HTTP target URL")
+    parser.add_argument("--https-url", default=DEFAULT_HTTPS_URL, help="HTTPS target URL")
+    parser.add_argument("--requests", type=int, default=DEFAULT_REQUESTS, help="Requests per protocol")
+    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SEC, help="Request timeout in seconds")
+    parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_SEC, help="Delay between requests in seconds")
+    parser.add_argument(
+        "--verify-tls",
+        action="store_true",
+        default=DEFAULT_VERIFY_TLS,
+        help="Verify HTTPS certificates. Disabled by default for lab self-signed certificates.",
+    )
     args = parser.parse_args()
 
-    run_comparison(num_requests=args.requests, timeout_sec=args.timeout, interval_sec=args.interval)
+    run_comparison(
+        num_requests=args.requests,
+        timeout_sec=args.timeout,
+        interval_sec=args.interval,
+        http_url=args.http_url,
+        https_url=args.https_url,
+        verify_tls=args.verify_tls,
+    )
