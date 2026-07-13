@@ -55,6 +55,7 @@ output/
 *.synctex.gz
 *.toc
 *.pdf
+!/CCEN 356 Project Report B3 Team 1 (Spring 2026).pdf
 
 # Keep curated public visuals in docs/assets.
 !docs/assets/
